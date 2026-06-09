@@ -1,3 +1,4 @@
+//###Test START##
 /*
  * Licensed to the Apache Software Foundation (ASF) under one
  * or more contributor license agreements.  See the NOTICE file
@@ -19,6 +20,7 @@
 package org.apache.syncope.core.provisioning.java.job;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.junit.jupiter.api.Assertions.assertNotNull;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.ArgumentMatchers.anyBoolean;
@@ -27,6 +29,7 @@ import static org.mockito.ArgumentMatchers.isNull;
 import static org.mockito.Mockito.inOrder;
 import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.never;
+import static org.mockito.Mockito.times;
 import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.verifyNoInteractions;
 import static org.mockito.Mockito.when;
@@ -59,8 +62,9 @@ import org.junit.jupiter.api.Test;
 import org.mockito.ArgumentCaptor;
 import org.mockito.InOrder;
 import org.springframework.data.domain.Pageable;
+import org.springframework.data.domain.Sort;
 
-public class GroupMemberProvisionTaskJobDelegateTest {
+public class GroupMemberProvisionTaskJobDelegateFewShotTest {
 
     private static final String GROUP_KEY = "group-1";
 
@@ -68,7 +72,11 @@ public class GroupMemberProvisionTaskJobDelegateTest {
 
     private static final String USER_KEY = "user-1";
 
+    private static final String USER_KEY_2 = "user-2";
+
     private static final String ANY_OBJECT_KEY = "printer-1";
+
+    private static final String ANY_OBJECT_KEY_2 = "scanner-1";
 
     private TestableGroupMemberProvisionTaskJobDelegate delegate;
 
@@ -101,13 +109,9 @@ public class GroupMemberProvisionTaskJobDelegateTest {
         resources = List.of("resource-1");
 
         /*
-         * The delegate is created once before each test and receives mocked
-         * dependencies through reflection, because the production class relies
-         * on Spring @Autowired fields.
-         *
-         * This keeps the tests unit-level and focused on the behavior of
-         * GroupMemberProvisionTaskJobDelegate, without starting the Spring
-         * container or using a real persistence layer.
+         * The production class receives its dependencies through Spring
+         * injection. These unit tests inject mocks through reflection so that
+         * doExecute() can be tested without starting the Spring container.
          */
         delegate = new TestableGroupMemberProvisionTaskJobDelegate();
 
@@ -119,7 +123,7 @@ public class GroupMemberProvisionTaskJobDelegateTest {
 
         /*
          * execute() normally initializes these fields from JobExecutionContext.
-         * Since these tests focus on doExecute(), we set them directly.
+         * Since these tests focus on doExecute(), they set them directly.
          */
         setField(delegate, "groupKey", GROUP_KEY);
         setField(delegate, "action", ProvisionAction.PROVISION);
@@ -127,11 +131,10 @@ public class GroupMemberProvisionTaskJobDelegateTest {
         when(groupDAO.authFind(GROUP_KEY)).thenReturn(group);
         when(group.getName()).thenReturn(GROUP_NAME);
         when(groupDAO.findAllResourceKeys(GROUP_KEY)).thenReturn(resources);
-
         when(realmDAO.getRoot()).thenReturn(rootRealm);
 
         /*
-         * Default search behavior: no users and no any objects.
+         * Default search behavior: the group has no members.
          * Individual tests override these stubbings only when they need
          * specific members or counts.
          */
@@ -170,25 +173,17 @@ public class GroupMemberProvisionTaskJobDelegateTest {
                 thenReturn(List.of());
     }
 
-    /*
-     * TC1-TC11 focus on doExecute().
-     * This is the central method of the class because it retrieves the group,
-     * finds group members, chooses between provision and deprovision, handles
-     * pagination, manages stop requests and builds the final execution report.
-     */
-
     @Test
     @DisplayName("TC1: PROVISION with no members")
     public void testTC1_DoExecute_ProvisionNoMembers() {
         String result = delegate.runDoExecute();
 
         /*
-         * This is the minimal happy path. The group exists, but it has no user
-         * members and no any object members. The job must produce the initial
-         * report and must not call any provisioning manager.
+         * Minimal happy path. The group exists, but it has no user members and
+         * no any object members. No provisioning manager must be called.
          */
         assertTrue(result.contains("Group engineering members provision"),
-                "TC1 failed: the initial provision report is missing. Actual result: " + result);
+                "TC1 failed: initial provision report is missing. Actual result: " + result);
 
         verifyNoInteractions(userProvisioningManager, anyObjectProvisioningManager);
 
@@ -234,15 +229,15 @@ public class GroupMemberProvisionTaskJobDelegateTest {
         String result = delegate.runDoExecute();
 
         /*
-         * This test checks the standard user provisioning path. Since the
-         * failure reason is blank, the report must contain the user and
-         * resource information, but no additional failure detail.
+         * Standard user provisioning path. Since the failure reason is blank,
+         * the report must include the user and resource but no extra failure
+         * detail.
          */
         assertTrue(result.contains("User user-1"),
-                "TC2 failed: the user key is missing from the report. Actual result: " + result);
+                "TC2 failed: user key is missing from the report. Actual result: " + result);
 
         assertTrue(result.contains("Resource resource-1"),
-                "TC2 failed: the resource key is missing from the report. Actual result: " + result);
+                "TC2 failed: resource key is missing from the report. Actual result: " + result);
 
         verify(userProvisioningManager).provision(
                 eq(USER_KEY),
@@ -294,11 +289,11 @@ public class GroupMemberProvisionTaskJobDelegateTest {
         String result = delegate.runDoExecute();
 
         /*
-         * A non-blank failure reason is part of the observable report. This
-         * covers the branch guarded by StringUtils.isNotBlank().
+         * A non-blank failure reason is appended to the report. This covers the
+         * StringUtils.isNotBlank() branch for user propagation statuses.
          */
         assertTrue(result.contains("User user-1"),
-                "TC3 failed: the user key is missing from the report. Actual result: " + result);
+                "TC3 failed: user key is missing from the report. Actual result: " + result);
 
         assertTrue(result.contains("Connection refused"),
                 "TC3 failed: failure reason was not appended to the report. Actual result: " + result);
@@ -339,11 +334,11 @@ public class GroupMemberProvisionTaskJobDelegateTest {
         String result = delegate.runDoExecute();
 
         /*
-         * With DEPROVISION action, the delegate must select the deprovision
-         * method for users and must not call the provision method.
+         * With DEPROVISION action, the user deprovision method must be used and
+         * the provision method must not be invoked.
          */
         assertTrue(result.contains("Group engineering members deprovision"),
-                "TC4 failed: the report does not describe a deprovision operation. Actual result: " + result);
+                "TC4 failed: deprovision heading is missing. Actual result: " + result);
 
         verify(userProvisioningManager).deprovision(
                 eq(USER_KEY),
@@ -358,6 +353,10 @@ public class GroupMemberProvisionTaskJobDelegateTest {
                 any(),
                 anyBoolean(),
                 any());
+
+        assertTrue(delegate.statuses.stream().anyMatch(statusMessage ->
+                statusMessage.contains("About to deprovision 1 users from [resource-1]")),
+                "TC4 failed: deprovision user status was not recorded.");
     }
 
     @Test
@@ -395,13 +394,12 @@ public class GroupMemberProvisionTaskJobDelegateTest {
         delegate.runDoExecute();
 
         /*
-         * The production code computes pages as count / pageSize + 1.
-         * Therefore, when the count is exactly equal to the default page size,
-         * two pages are requested: page 0 and page 1.
+         * The production code computes pages as count / pageSize + 1. When the
+         * count exactly equals the page size, pages 0 and 1 are requested.
          */
         ArgumentCaptor<Pageable> pageableCaptor = ArgumentCaptor.forClass(Pageable.class);
 
-        verify(anySearchDAO, org.mockito.Mockito.times(2)).search(
+        verify(anySearchDAO, times(2)).search(
                 eq(rootRealm),
                 eq(true),
                 eq(SyncopeConstants.FULL_ADMIN_REALMS),
@@ -416,12 +414,48 @@ public class GroupMemberProvisionTaskJobDelegateTest {
                 "TC5 failed: second requested user page should be 1.");
 
         assertEquals(AnyDAO.DEFAULT_PAGE_SIZE, pageableCaptor.getAllValues().get(0).getPageSize(),
-                "TC5 failed: the page size should match AnyDAO.DEFAULT_PAGE_SIZE.");
+                "TC5 failed: user page size should match AnyDAO.DEFAULT_PAGE_SIZE.");
     }
 
     @Test
-    @DisplayName("TC6: PROVISION of one any object")
-    public void testTC6_DoExecute_ProvisionAnyObject() {
+    @DisplayName("TC6: User search uses ascending creationDate sort")
+    public void testTC6_DoExecute_UserSearchUsesCreationDateAscendingSort() {
+        when(anySearchDAO.count(
+                eq(rootRealm),
+                eq(true),
+                eq(SyncopeConstants.FULL_ADMIN_REALMS),
+                any(),
+                eq(AnyTypeKind.USER))).
+                thenReturn(1L);
+
+        delegate.runDoExecute();
+
+        /*
+         * Members are searched using a stable creationDate ascending ordering.
+         * This captures the Pageable and verifies its sort contract.
+         */
+        ArgumentCaptor<Pageable> pageableCaptor = ArgumentCaptor.forClass(Pageable.class);
+
+        verify(anySearchDAO).search(
+                eq(rootRealm),
+                eq(true),
+                eq(SyncopeConstants.FULL_ADMIN_REALMS),
+                any(),
+                pageableCaptor.capture(),
+                eq(AnyTypeKind.USER));
+
+        Sort.Order order = pageableCaptor.getValue().getSort().getOrderFor("creationDate");
+
+        assertNotNull(order,
+                "TC6 failed: user search should contain a sort order for creationDate.");
+
+        assertTrue(order.isAscending(),
+                "TC6 failed: user search should be sorted by creationDate ascending.");
+    }
+
+    @Test
+    @DisplayName("TC7: PROVISION of one any object")
+    public void testTC7_DoExecute_ProvisionAnyObject() {
         AnyObject anyObject = mockAnyObject(ANY_OBJECT_KEY, "PRINTER");
         PropagationStatus status = mockPropagationStatus("resource-1", "");
 
@@ -452,14 +486,14 @@ public class GroupMemberProvisionTaskJobDelegateTest {
         String result = delegate.runDoExecute();
 
         /*
-         * Any objects are processed after users. The report contains the
-         * any object type key followed by the any object key.
+         * Any objects are processed after users. The report contains the any
+         * object type key followed by the any object key.
          */
         assertTrue(result.contains("PRINTER printer-1"),
-                "TC6 failed: any object type and key are missing from the report. Actual result: " + result);
+                "TC7 failed: any object type and key are missing from the report. Actual result: " + result);
 
         assertTrue(result.contains("Resource resource-1"),
-                "TC6 failed: resource information is missing from the report. Actual result: " + result);
+                "TC7 failed: resource information is missing from the report. Actual result: " + result);
 
         verify(anyObjectProvisioningManager).provision(
                 eq(ANY_OBJECT_KEY),
@@ -475,8 +509,51 @@ public class GroupMemberProvisionTaskJobDelegateTest {
     }
 
     @Test
-    @DisplayName("TC7: DEPROVISION of one any object")
-    public void testTC7_DoExecute_DeprovisionAnyObject() throws Exception {
+    @DisplayName("TC8: PROVISION of one any object with failure reason")
+    public void testTC8_DoExecute_ProvisionAnyObjectWithFailureReason() {
+        AnyObject anyObject = mockAnyObject(ANY_OBJECT_KEY, "PRINTER");
+        PropagationStatus status = mockPropagationStatus("resource-1", "Timeout while writing object");
+
+        when(anySearchDAO.count(
+                eq(rootRealm),
+                eq(true),
+                eq(SyncopeConstants.FULL_ADMIN_REALMS),
+                any(),
+                eq(AnyTypeKind.ANY_OBJECT))).
+                thenReturn(1L);
+
+        when(anySearchDAO.search(
+                eq(rootRealm),
+                eq(true),
+                eq(SyncopeConstants.FULL_ADMIN_REALMS),
+                any(),
+                any(Pageable.class),
+                eq(AnyTypeKind.ANY_OBJECT))).
+                thenReturn(List.of(anyObject));
+
+        when(anyObjectProvisioningManager.provision(
+                eq(ANY_OBJECT_KEY),
+                eq(resources),
+                eq(false),
+                isNull())).
+                thenReturn(List.of(status));
+
+        String result = delegate.runDoExecute();
+
+        /*
+         * This covers the StringUtils.isNotBlank() branch for any object
+         * propagation statuses.
+         */
+        assertTrue(result.contains("PRINTER printer-1"),
+                "TC8 failed: any object information is missing from the report. Actual result: " + result);
+
+        assertTrue(result.contains("Timeout while writing object"),
+                "TC8 failed: any object failure reason is missing. Actual result: " + result);
+    }
+
+    @Test
+    @DisplayName("TC9: DEPROVISION of one any object")
+    public void testTC9_DoExecute_DeprovisionAnyObject() throws Exception {
         setField(delegate, "action", ProvisionAction.DEPROVISION);
 
         AnyObject anyObject = mockAnyObject(ANY_OBJECT_KEY, "PRINTER");
@@ -509,14 +586,14 @@ public class GroupMemberProvisionTaskJobDelegateTest {
         String result = delegate.runDoExecute();
 
         /*
-         * This test mirrors TC6 but with DEPROVISION. It checks that the
-         * any object manager uses the correct deprovision method.
+         * Mirrors any object provisioning but verifies that DEPROVISION selects
+         * the correct manager method.
          */
         assertTrue(result.contains("Group engineering members deprovision"),
-                "TC7 failed: the report does not describe a deprovision operation. Actual result: " + result);
+                "TC9 failed: deprovision heading is missing. Actual result: " + result);
 
         assertTrue(result.contains("PRINTER printer-1"),
-                "TC7 failed: any object information is missing from the report. Actual result: " + result);
+                "TC9 failed: any object information is missing from the report. Actual result: " + result);
 
         verify(anyObjectProvisioningManager).deprovision(
                 eq(ANY_OBJECT_KEY),
@@ -532,8 +609,63 @@ public class GroupMemberProvisionTaskJobDelegateTest {
     }
 
     @Test
-    @DisplayName("TC8: PROVISION with both user and any object members")
-    public void testTC8_DoExecute_ProcessUsersBeforeAnyObjects() {
+    @DisplayName("TC10: Any object pagination when count equals AnyDAO.DEFAULT_PAGE_SIZE")
+    public void testTC10_DoExecute_AnyObjectPaginationAtDefaultPageSize() {
+        AnyObject anyObject = mockAnyObject(ANY_OBJECT_KEY, "PRINTER");
+        PropagationStatus status = mockPropagationStatus("resource-1", "");
+
+        when(anySearchDAO.count(
+                eq(rootRealm),
+                eq(true),
+                eq(SyncopeConstants.FULL_ADMIN_REALMS),
+                any(),
+                eq(AnyTypeKind.ANY_OBJECT))).
+                thenReturn((long) AnyDAO.DEFAULT_PAGE_SIZE);
+
+        when(anySearchDAO.search(
+                eq(rootRealm),
+                eq(true),
+                eq(SyncopeConstants.FULL_ADMIN_REALMS),
+                any(),
+                any(Pageable.class),
+                eq(AnyTypeKind.ANY_OBJECT))).
+                thenReturn(List.of(anyObject), List.of());
+
+        when(anyObjectProvisioningManager.provision(
+                eq(ANY_OBJECT_KEY),
+                eq(resources),
+                eq(false),
+                isNull())).
+                thenReturn(List.of(status));
+
+        delegate.runDoExecute();
+
+        /*
+         * The same page calculation is used for any objects.
+         */
+        ArgumentCaptor<Pageable> pageableCaptor = ArgumentCaptor.forClass(Pageable.class);
+
+        verify(anySearchDAO, times(2)).search(
+                eq(rootRealm),
+                eq(true),
+                eq(SyncopeConstants.FULL_ADMIN_REALMS),
+                any(),
+                pageableCaptor.capture(),
+                eq(AnyTypeKind.ANY_OBJECT));
+
+        assertEquals(0, pageableCaptor.getAllValues().get(0).getPageNumber(),
+                "TC10 failed: first requested any object page should be 0.");
+
+        assertEquals(1, pageableCaptor.getAllValues().get(1).getPageNumber(),
+                "TC10 failed: second requested any object page should be 1.");
+
+        assertEquals(AnyDAO.DEFAULT_PAGE_SIZE, pageableCaptor.getAllValues().get(0).getPageSize(),
+                "TC10 failed: any object page size should match AnyDAO.DEFAULT_PAGE_SIZE.");
+    }
+
+    @Test
+    @DisplayName("TC11: PROVISION with both user and any object members")
+    public void testTC11_DoExecute_ProcessUsersBeforeAnyObjects() {
         User user = mockUser(USER_KEY);
         AnyObject anyObject = mockAnyObject(ANY_OBJECT_KEY, "PRINTER");
 
@@ -594,13 +726,12 @@ public class GroupMemberProvisionTaskJobDelegateTest {
 
         /*
          * The implementation processes users first and any objects afterwards.
-         * This test verifies the complete flow with both member categories.
          */
         assertTrue(result.contains("User user-1"),
-                "TC8 failed: user member is missing from the report. Actual result: " + result);
+                "TC11 failed: user member is missing from the report. Actual result: " + result);
 
         assertTrue(result.contains("PRINTER printer-1"),
-                "TC8 failed: any object member is missing from the report. Actual result: " + result);
+                "TC11 failed: any object member is missing from the report. Actual result: " + result);
 
         InOrder order = inOrder(userProvisioningManager, anyObjectProvisioningManager);
 
@@ -620,50 +751,15 @@ public class GroupMemberProvisionTaskJobDelegateTest {
     }
 
     @Test
-    @DisplayName("TC9: Stop requested before member processing")
-    public void testTC9_DoExecute_StopBeforeProcessingMembers() {
-        when(anySearchDAO.count(
-                eq(rootRealm),
-                eq(true),
-                eq(SyncopeConstants.FULL_ADMIN_REALMS),
-                any(),
-                eq(AnyTypeKind.USER))).
-                thenReturn(1L);
-
-        delegate.stop();
-
-        String result = delegate.runDoExecute();
-
-        /*
-         * If stop is requested before entering the user loop, the delegate
-         * must skip the searches and must not start any object processing.
-         */
-        assertTrue(result.contains("Stop was requested"),
-                "TC9 failed: stop message is missing from the report. Actual result: " + result);
-
-        verify(anySearchDAO, never()).search(
-                eq(rootRealm),
-                eq(true),
-                eq(SyncopeConstants.FULL_ADMIN_REALMS),
-                any(),
-                any(Pageable.class),
-                eq(AnyTypeKind.USER));
-
-        verify(anySearchDAO, never()).count(
-                eq(rootRealm),
-                eq(true),
-                eq(SyncopeConstants.FULL_ADMIN_REALMS),
-                any(),
-                eq(AnyTypeKind.ANY_OBJECT));
-
-        verifyNoInteractions(userProvisioningManager, anyObjectProvisioningManager);
-    }
-
-    @Test
-    @DisplayName("TC10: Stop requested during user processing")
-    public void testTC10_DoExecute_StopDuringUserProcessing() {
+    @DisplayName("TC12: Multiple propagation statuses are fully reported")
+    public void testTC12_DoExecute_MultiplePropagationStatusesForSameUser() {
         User user = mockUser(USER_KEY);
-        PropagationStatus status = mockPropagationStatus("resource-1", "");
+
+        PropagationStatus firstStatus = mockPropagationStatus("resource-1", "");
+        PropagationStatus secondStatus = mockPropagationStatus("resource-2", "Second resource failed");
+
+        Collection<String> multipleResources = List.of("resource-1", "resource-2");
+        when(groupDAO.findAllResourceKeys(GROUP_KEY)).thenReturn(multipleResources);
 
         when(anySearchDAO.count(
                 eq(rootRealm),
@@ -686,6 +782,100 @@ public class GroupMemberProvisionTaskJobDelegateTest {
                 eq(USER_KEY),
                 eq(true),
                 isNull(),
+                eq(multipleResources),
+                eq(false),
+                isNull())).
+                thenReturn(List.of(firstStatus, secondStatus));
+
+        String result = delegate.runDoExecute();
+
+        /*
+         * A single member can return multiple propagation statuses. Each one
+         * must be present in the final report.
+         */
+        assertTrue(result.contains("Resource resource-1"),
+                "TC12 failed: first propagation status is missing. Actual result: " + result);
+
+        assertTrue(result.contains("Resource resource-2"),
+                "TC12 failed: second propagation status is missing. Actual result: " + result);
+
+        assertTrue(result.contains("Second resource failed"),
+                "TC12 failed: failure reason for second status is missing. Actual result: " + result);
+    }
+
+    @Test
+    @DisplayName("TC13: Stop requested before member processing")
+    public void testTC13_DoExecute_StopBeforeProcessingMembers() {
+        when(anySearchDAO.count(
+                eq(rootRealm),
+                eq(true),
+                eq(SyncopeConstants.FULL_ADMIN_REALMS),
+                any(),
+                eq(AnyTypeKind.USER))).
+                thenReturn(1L);
+
+        delegate.stop();
+
+        String result = delegate.runDoExecute();
+
+        /*
+         * If stop is requested before entering the user loop, searches are not
+         * performed and the any object phase is skipped.
+         */
+        assertTrue(result.contains("Stop was requested"),
+                "TC13 failed: stop message is missing. Actual result: " + result);
+
+        verify(anySearchDAO, never()).search(
+                eq(rootRealm),
+                eq(true),
+                eq(SyncopeConstants.FULL_ADMIN_REALMS),
+                any(),
+                any(Pageable.class),
+                eq(AnyTypeKind.USER));
+
+        verify(anySearchDAO, never()).count(
+                eq(rootRealm),
+                eq(true),
+                eq(SyncopeConstants.FULL_ADMIN_REALMS),
+                any(),
+                eq(AnyTypeKind.ANY_OBJECT));
+
+        verifyNoInteractions(userProvisioningManager, anyObjectProvisioningManager);
+    }
+
+    @Test
+    @DisplayName("TC14: Stop requested during user processing")
+    public void testTC14_DoExecute_StopDuringUserProcessing() {
+        User user = mockUser(USER_KEY);
+        User secondUser = mockUser(USER_KEY_2);
+        PropagationStatus status = mockPropagationStatus("resource-1", "");
+
+        when(anySearchDAO.count(
+                eq(rootRealm),
+                eq(true),
+                eq(SyncopeConstants.FULL_ADMIN_REALMS),
+                any(),
+                eq(AnyTypeKind.USER))).
+                thenReturn(2L);
+
+        /*
+         * The second mocked user is created before the stubbing below.
+         * Creating it inside thenReturn(List.of(...)) would start another
+         * Mockito stubbing while this one is still unfinished.
+         */
+        when(anySearchDAO.search(
+                eq(rootRealm),
+                eq(true),
+                eq(SyncopeConstants.FULL_ADMIN_REALMS),
+                any(),
+                any(Pageable.class),
+                eq(AnyTypeKind.USER))).
+                thenReturn(List.of(user, secondUser));
+
+        when(userProvisioningManager.provision(
+                eq(USER_KEY),
+                eq(true),
+                isNull(),
                 eq(resources),
                 eq(false),
                 isNull())).
@@ -698,13 +888,22 @@ public class GroupMemberProvisionTaskJobDelegateTest {
 
         /*
          * A stop request raised during user provisioning is observed after the
-         * current user has been reported. The any object phase must not start.
+         * current user has been reported. Remaining users and any objects are
+         * skipped.
          */
         assertTrue(result.contains("User user-1"),
-                "TC10 failed: the current user should still be reported. Actual result: " + result);
+                "TC14 failed: current user should still be reported. Actual result: " + result);
 
         assertTrue(result.contains("Stop was requested"),
-                "TC10 failed: stop message is missing from the report. Actual result: " + result);
+                "TC14 failed: stop message is missing. Actual result: " + result);
+
+        verify(userProvisioningManager, never()).provision(
+                eq(USER_KEY_2),
+                eq(true),
+                isNull(),
+                eq(resources),
+                eq(false),
+                isNull());
 
         verify(anySearchDAO, never()).count(
                 eq(rootRealm),
@@ -717,9 +916,10 @@ public class GroupMemberProvisionTaskJobDelegateTest {
     }
 
     @Test
-    @DisplayName("TC11: Stop requested during any object processing")
-    public void testTC11_DoExecute_StopDuringAnyObjectProcessing() {
-        AnyObject anyObject = mockAnyObject(ANY_OBJECT_KEY, "PRINTER");
+    @DisplayName("TC15: Stop requested during any object processing")
+    public void testTC15_DoExecute_StopDuringAnyObjectProcessing() {
+        AnyObject firstAnyObject = mockAnyObject(ANY_OBJECT_KEY, "PRINTER");
+        AnyObject secondAnyObject = mockAnyObject(ANY_OBJECT_KEY_2, "SCANNER");
         PropagationStatus status = mockPropagationStatus("resource-1", "");
 
         when(anySearchDAO.count(
@@ -728,7 +928,7 @@ public class GroupMemberProvisionTaskJobDelegateTest {
                 eq(SyncopeConstants.FULL_ADMIN_REALMS),
                 any(),
                 eq(AnyTypeKind.ANY_OBJECT))).
-                thenReturn(1L);
+                thenReturn(2L);
 
         when(anySearchDAO.search(
                 eq(rootRealm),
@@ -737,7 +937,7 @@ public class GroupMemberProvisionTaskJobDelegateTest {
                 any(),
                 any(Pageable.class),
                 eq(AnyTypeKind.ANY_OBJECT))).
-                thenReturn(List.of(anyObject));
+                thenReturn(List.of(firstAnyObject, secondAnyObject));
 
         when(anyObjectProvisioningManager.provision(
                 eq(ANY_OBJECT_KEY),
@@ -752,26 +952,25 @@ public class GroupMemberProvisionTaskJobDelegateTest {
         String result = delegate.runDoExecute();
 
         /*
-         * In this case the user phase is completed normally, then the stop is
-         * requested while processing an any object. The final report must still
-         * contain the current any object and the stop message.
+         * The stop request is detected after the current any object is
+         * reported. Remaining any objects are skipped.
          */
         assertTrue(result.contains("PRINTER printer-1"),
-                "TC11 failed: the current any object should be reported. Actual result: " + result);
+                "TC15 failed: current any object should be reported. Actual result: " + result);
 
         assertTrue(result.contains("Stop was requested"),
-                "TC11 failed: stop message is missing from the report. Actual result: " + result);
+                "TC15 failed: stop message is missing. Actual result: " + result);
+
+        verify(anyObjectProvisioningManager, never()).provision(
+                eq(ANY_OBJECT_KEY_2),
+                eq(resources),
+                eq(false),
+                isNull());
     }
 
-    /*
-     * TC12 covers hasToBeRegistered().
-     * The method is simple, but it represents the class contract that every
-     * execution result must be recorded.
-     */
-
     @Test
-    @DisplayName("TC12: hasToBeRegistered always returns true")
-    public void testTC12_HasToBeRegistered_AlwaysTrue() {
+    @DisplayName("TC16: hasToBeRegistered always returns true")
+    public void testTC16_HasToBeRegistered_AlwaysTrue() {
         TaskExec<?> execution = mock(TaskExec.class);
 
         /*
@@ -779,15 +978,15 @@ public class GroupMemberProvisionTaskJobDelegateTest {
          * true both for a real execution object and for null.
          */
         assertTrue(delegate.callHasToBeRegistered(execution),
-                "TC12 failed: hasToBeRegistered should return true for a non-null execution.");
+                "TC16 failed: hasToBeRegistered should return true for a non-null execution.");
 
         assertTrue(delegate.callHasToBeRegistered(null),
-                "TC12 failed: hasToBeRegistered should return true for a null execution.");
+                "TC16 failed: hasToBeRegistered should return true for a null execution.");
     }
 
     /*
-     * Helper methods used to keep the test cases readable.
-     * They create the minimum mocked domain objects needed by doExecute().
+     * Helper methods used to keep the test cases readable. They create the
+     * minimum mocked domain objects needed by doExecute().
      */
 
     private static User mockUser(final String key) {
@@ -841,7 +1040,7 @@ public class GroupMemberProvisionTaskJobDelegateTest {
     }
 
     /*
-     * Test subclass used to expose protected methods and to collect status
+     * Test subclass used to expose protected methods and collect status
      * messages without relying on the real task execution infrastructure.
      */
     private static class TestableGroupMemberProvisionTaskJobDelegate extends GroupMemberProvisionTaskJobDelegate {
@@ -862,3 +1061,4 @@ public class GroupMemberProvisionTaskJobDelegateTest {
         }
     }
 }
+//###Test END##
