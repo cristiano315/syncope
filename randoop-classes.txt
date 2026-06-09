@@ -1,1 +1,1 @@
-org.apache.syncope.core.provisioning.java.job.GroupMemberProvisionTaskJobDelegate
+org.apache.syncope.core.persistence.neo4j.dao.Neo4jRealmSearchDAOHarness
