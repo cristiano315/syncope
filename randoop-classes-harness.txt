@@ -1,1 +1,0 @@
-org.apache.syncope.core.provisioning.java.job.GroupMemberProvisionTaskJobDelegate

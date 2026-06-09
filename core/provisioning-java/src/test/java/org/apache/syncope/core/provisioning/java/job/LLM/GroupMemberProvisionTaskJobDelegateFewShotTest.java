@@ -1,4 +1,3 @@
-//###Test START##
 /*
  * Licensed to the Apache Software Foundation (ASF) under one
  * or more contributor license agreements.  See the NOTICE file
@@ -17,6 +16,7 @@
  * specific language governing permissions and limitations
  * under the License.
  */
+//###Test START##
 package org.apache.syncope.core.provisioning.java.job;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
