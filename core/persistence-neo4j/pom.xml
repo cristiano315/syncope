@@ -114,6 +114,44 @@ under the License.
         <groupId>org.apache.maven.plugins</groupId>
         <artifactId>maven-checkstyle-plugin</artifactId>
       </plugin>
+
+      <plugin>
+            <groupId>org.pitest</groupId>
+            <artifactId>pitest-maven</artifactId>
+            <version>1.19.6</version>
+
+            <dependencies>
+                <dependency>
+                    <groupId>org.pitest</groupId>
+                    <artifactId>pitest-junit5-plugin</artifactId>
+                    <version>1.2.2</version>
+                </dependency>
+            </dependencies>
+
+            <configuration>
+
+                <!-- class to mutate -->
+                <targetClasses>
+                    <param>
+                        org.apache.syncope.core.persistence.neo4j.dao.Neo4jRealmSearchDAO
+                    </param>
+                </targetClasses>
+
+                <!-- test to run -->
+                <targetTests>
+                    <param>org.apache.syncope.core.persistence.neo4j.dao.*</param>
+                </targetTests>
+
+                <!-- html report -->
+                <outputFormats>
+                    <param>HTML</param>
+                </outputFormats>
+                <threads>4</threads>
+                <timestampedReports>false</timestampedReports>
+                <verbose>false</verbose>
+
+            </configuration>
+        </plugin>
     </plugins>
 
     <resources>
