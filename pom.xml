@@ -414,6 +414,7 @@ under the License.
   <properties>
     <project.build.outputTimestamp>2026-05-22T07:49:50Z</project.build.outputTimestamp>
     <syncope.version>${project.version}</syncope.version>
+    <sonar.organization>cristiano315</sonar.organization>
 
     <connid.version>1.6.1.0</connid.version>
     <connid.soap.version>1.5.0</connid.soap.version>
