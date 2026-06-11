@@ -1,0 +1,3 @@
+org.apache.syncope.core.provisioning.java.job.GroupMemberProvisionTaskJobDelegate1Harness
+org.apache.syncope.core.provisioning.java.job.GroupMemberProvisionTaskJobDelegate2Harness
+org.apache.syncope.core.provisioning.java.job.GroupMemberProvisionTaskJobDelegate4Harness

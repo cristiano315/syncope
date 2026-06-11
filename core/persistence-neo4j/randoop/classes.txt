@@ -1,0 +1,4 @@
+org.apache.syncope.core.persistence.neo4j.dao.Neo4jRealmSearchDAO2Harness
+org.apache.syncope.core.persistence.neo4j.dao.Neo4jRealmSearchDAO3Harness
+org.apache.syncope.core.persistence.neo4j.dao.Neo4jRealmSearchDAO4Harness
+
