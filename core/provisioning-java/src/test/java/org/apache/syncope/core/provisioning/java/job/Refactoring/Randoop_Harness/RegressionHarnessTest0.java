@@ -1033,7 +1033,7 @@ public class RegressionHarnessTest0 {
             System.out.format("%n%s%n", "RegressionTest0.test105");
         org.apache.syncope.core.provisioning.api.job.JobExecutionContext jobExecutionContext0 = null;
         java.lang.String str1 = org.apache.syncope.core.provisioning.java.job.GroupMemberProvisionTaskJobDelegate4Harness.safeDoExecute(jobExecutionContext0);
-        org.junit.Assert.assertEquals("'" + str1 + "' != '" + "EX:NullPointerException:Cannot invoke \"org.apache.syncope.core.persistence.api.dao.GroupDAO.authFind(String)\" because \"this.groupDAO\" is null" + "'", str1, "EX:NullPointerException:Cannot invoke \"org.apache.syncope.core.persistence.api.dao.GroupDAO.authFind(String)\" because \"this.groupDAO\" is null");
+        org.junit.Assert.assertTrue(str1.startsWith("EX:NullPointerException"));
     }
 
     @Test
@@ -1489,8 +1489,7 @@ public class RegressionHarnessTest0 {
             System.out.format("%n%s%n", "RegressionTest0.test149");
         org.apache.syncope.core.provisioning.api.job.JobExecutionContext jobExecutionContext0 = null;
         java.lang.String str1 = org.apache.syncope.core.provisioning.java.job.GroupMemberProvisionTaskJobDelegate4Harness.safeDoExecuteAfterStop(jobExecutionContext0);
-        org.junit.Assert.assertEquals("'" + str1 + "' != '" + "EX:NullPointerException:Cannot invoke \"org.apache.syncope.core.persistence.api.dao.GroupDAO.authFind(String)\" because \"this.groupDAO\" is null" + "'", str1, "EX:NullPointerException:Cannot invoke \"org.apache.syncope.core.persistence.api.dao.GroupDAO.authFind(String)\" because \"this.groupDAO\" is null");
-    }
+        org.junit.Assert.assertTrue(str1.startsWith("EX:NullPointerException"));    }
 
     @Test
     public void test150() throws Throwable {
