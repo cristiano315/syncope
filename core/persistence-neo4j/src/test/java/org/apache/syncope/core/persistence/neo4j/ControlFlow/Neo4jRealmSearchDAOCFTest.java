@@ -37,7 +37,6 @@ import java.util.List;
 import java.util.Map;
 import java.util.Optional;
 import java.util.Set;
-
 import org.apache.commons.text.TextStringBuilder;
 import org.apache.syncope.common.lib.SyncopeClientException;
 import org.apache.syncope.common.lib.types.AttrSchemaType;
@@ -64,156 +63,179 @@ import org.springframework.data.util.Streamable;
 
 public class Neo4jRealmSearchDAOCFTest {
 
-    private Neo4jRealmSearchDAO searchDAO;
+  private Neo4jRealmSearchDAO searchDAO;
 
-    private Map<String, Object> parameters;
+  private Map<String, Object> parameters;
 
-    private RealmDAO realmDAO;
+  private RealmDAO realmDAO;
 
-    private PlainSchemaDAO plainSchemaDAO;
+  private PlainSchemaDAO plainSchemaDAO;
 
-    private RealmUtils realmUtils;
+  private RealmUtils realmUtils;
 
-    private Neo4jClient neo4jClient;
+  private Neo4jClient neo4jClient;
 
-    private Neo4jTemplate neo4jTemplate;
+  private Neo4jTemplate neo4jTemplate;
 
-    /*
-     * This small dummy class is only used to obtain a real Field instance.
-     * RealmUtils.getField() returns Optional<Field>, therefore a simple String
-     * would not be enough for the pagination test.
-     */
-    private static class DummyRealmFields {
+  /*
+   * This small dummy class is only used to obtain a real Field instance.
+   * RealmUtils.getField() returns Optional<Field>, therefore a simple String
+   * would not be enough for the pagination test.
+   */
+  private static class DummyRealmFields {
 
-        public String name;
-    }
+    public String name;
+  }
 
-    @BeforeEach
-    public void setUp() {
-        realmDAO = mock(RealmDAO.class);
-        plainSchemaDAO = mock(PlainSchemaDAO.class);
-        realmUtils = mock(RealmUtils.class);
-        neo4jClient = mock(Neo4jClient.class, RETURNS_DEEP_STUBS);
-        neo4jTemplate = mock(Neo4jTemplate.class);
-
-        /*
-         * The DAO is created once before each test with mocked dependencies.
-         * This keeps the tests focused on the behavior of Neo4jRealmSearchDAO
-         * without requiring a real Neo4j instance or real persistence objects.
-         */
-        searchDAO = new Neo4jRealmSearchDAO(
-                realmDAO,
-                plainSchemaDAO,
-                null,
-                null,
-                null,
-                null,
-                realmUtils,
-                neo4jTemplate,
-                neo4jClient);
-
-        parameters = new HashMap<>();
-    }
+  @BeforeEach
+  public void setUp() {
+    realmDAO = mock(RealmDAO.class);
+    plainSchemaDAO = mock(PlainSchemaDAO.class);
+    realmUtils = mock(RealmUtils.class);
+    neo4jClient = mock(Neo4jClient.class, RETURNS_DEEP_STUBS);
+    neo4jTemplate = mock(Neo4jTemplate.class);
 
     /*
-     * Helper methods used to keep the single test cases readable.
-     * They create the minimum mocked objects needed by fillAttrQuery()
-     * and by the query-building methods.
+     * The DAO is created once before each test with mocked dependencies.
+     * This keeps the tests focused on the behavior of Neo4jRealmSearchDAO
+     * without requiring a real Neo4j instance or real persistence objects.
      */
-    private PlainSchema mockSchema(final String key, final AttrSchemaType type, final boolean isUnique) {
-        PlainSchema schema = mock(PlainSchema.class);
-        when(schema.getKey()).thenReturn(key);
-        when(schema.getType()).thenReturn(type);
-        when(schema.isUniqueConstraint()).thenReturn(isUnique);
-        return schema;
+    searchDAO = new Neo4jRealmSearchDAO(
+      realmDAO,
+      plainSchemaDAO,
+      null,
+      null,
+      null,
+      null,
+      realmUtils,
+      neo4jTemplate,
+      neo4jClient
+    );
+
+    parameters = new HashMap<>();
+  }
+
+  /*
+   * Helper methods used to keep the single test cases readable.
+   * They create the minimum mocked objects needed by fillAttrQuery()
+   * and by the query-building methods.
+   */
+  private PlainSchema mockSchema(
+    final String key,
+    final AttrSchemaType type,
+    final boolean isUnique
+  ) {
+    PlainSchema schema = mock(PlainSchema.class);
+    when(schema.getKey()).thenReturn(key);
+    when(schema.getType()).thenReturn(type);
+    when(schema.isUniqueConstraint()).thenReturn(isUnique);
+    return schema;
+  }
+
+  private PlainAttrValue mockValue(
+    final String stringValue,
+    final OffsetDateTime dateValue
+  ) {
+    PlainAttrValue attrValue = mock(PlainAttrValue.class);
+    when(attrValue.getValue()).thenReturn(stringValue);
+    when(attrValue.getDateValue()).thenReturn(dateValue);
+    return attrValue;
+  }
+
+  private AnyCond mockCond(
+    final AnyCond.Type type,
+    final String schemaName,
+    final String expression
+  ) {
+    AnyCond cond = mock(AnyCond.class);
+    when(cond.getType()).thenReturn(type);
+    when(cond.getSchema()).thenReturn(schemaName);
+    when(cond.getExpression()).thenReturn(expression);
+    return cond;
+  }
+
+  private Field mockRealmField() {
+    try {
+      return DummyRealmFields.class.getDeclaredField("name");
+    } catch (NoSuchFieldException e) {
+      throw new IllegalStateException(e);
     }
+  }
 
-    private PlainAttrValue mockValue(final String stringValue, final OffsetDateTime dateValue) {
-        PlainAttrValue attrValue = mock(PlainAttrValue.class);
-        when(attrValue.getValue()).thenReturn(stringValue);
-        when(attrValue.getDateValue()).thenReturn(dateValue);
-        return attrValue;
-    }
+  private SearchCond mockLeafAttrCond(final AttrCond attrCond) {
+    SearchCond searchCond = mock(SearchCond.class);
 
-    private AnyCond mockCond(final AnyCond.Type type, final String schemaName, final String expression) {
-        AnyCond cond = mock(AnyCond.class);
-        when(cond.getType()).thenReturn(type);
-        when(cond.getSchema()).thenReturn(schemaName);
-        when(cond.getExpression()).thenReturn(expression);
-        return cond;
-    }
+    when(searchCond.getType()).thenReturn(SearchCond.Type.LEAF);
+    when(searchCond.asLeaf(AuxClassCond.class)).thenReturn(Optional.empty());
+    when(searchCond.asLeaf(ResourceCond.class)).thenReturn(Optional.empty());
+    when(searchCond.asLeaf(AnyCond.class)).thenReturn(Optional.empty());
+    when(searchCond.asLeaf(AttrCond.class)).thenReturn(Optional.of(attrCond));
 
-    private Field mockRealmField() {
-        try {
-            return DummyRealmFields.class.getDeclaredField("name");
-        } catch (NoSuchFieldException e) {
-            throw new IllegalStateException(e);
-        }
-    }
+    return searchCond;
+  }
 
-    private SearchCond mockLeafAttrCond(final AttrCond attrCond) {
-        SearchCond searchCond = mock(SearchCond.class);
+  private SearchCond mockLeafAuxClassCond(final String auxClass) {
+    AuxClassCond auxClassCond = mock(AuxClassCond.class);
+    when(auxClassCond.getAuxClass()).thenReturn(auxClass);
 
-        when(searchCond.getType()).thenReturn(SearchCond.Type.LEAF);
-        when(searchCond.asLeaf(AuxClassCond.class)).thenReturn(Optional.empty());
-        when(searchCond.asLeaf(ResourceCond.class)).thenReturn(Optional.empty());
-        when(searchCond.asLeaf(AnyCond.class)).thenReturn(Optional.empty());
-        when(searchCond.asLeaf(AttrCond.class)).thenReturn(Optional.of(attrCond));
+    SearchCond searchCond = mock(SearchCond.class);
 
-        return searchCond;
-    }
+    when(searchCond.getType()).thenReturn(SearchCond.Type.LEAF);
+    when(searchCond.asLeaf(AuxClassCond.class)).thenReturn(
+      Optional.of(auxClassCond)
+    );
+    when(searchCond.asLeaf(ResourceCond.class)).thenReturn(Optional.empty());
+    when(searchCond.asLeaf(AnyCond.class)).thenReturn(Optional.empty());
+    when(searchCond.asLeaf(AttrCond.class)).thenReturn(Optional.empty());
 
-    private SearchCond mockLeafAuxClassCond(final String auxClass) {
-        AuxClassCond auxClassCond = mock(AuxClassCond.class);
-        when(auxClassCond.getAuxClass()).thenReturn(auxClass);
+    return searchCond;
+  }
 
-        SearchCond searchCond = mock(SearchCond.class);
+  private SearchCond mockLeafResourceCond(final String resource) {
+    ResourceCond resourceCond = mock(ResourceCond.class);
+    when(resourceCond.getResource()).thenReturn(resource);
 
-        when(searchCond.getType()).thenReturn(SearchCond.Type.LEAF);
-        when(searchCond.asLeaf(AuxClassCond.class)).thenReturn(Optional.of(auxClassCond));
-        when(searchCond.asLeaf(ResourceCond.class)).thenReturn(Optional.empty());
-        when(searchCond.asLeaf(AnyCond.class)).thenReturn(Optional.empty());
-        when(searchCond.asLeaf(AttrCond.class)).thenReturn(Optional.empty());
+    SearchCond searchCond = mock(SearchCond.class);
 
-        return searchCond;
-    }
+    when(searchCond.getType()).thenReturn(SearchCond.Type.LEAF);
+    when(searchCond.asLeaf(AuxClassCond.class)).thenReturn(Optional.empty());
+    when(searchCond.asLeaf(ResourceCond.class)).thenReturn(
+      Optional.of(resourceCond)
+    );
+    when(searchCond.asLeaf(AnyCond.class)).thenReturn(Optional.empty());
+    when(searchCond.asLeaf(AttrCond.class)).thenReturn(Optional.empty());
 
-    private SearchCond mockLeafResourceCond(final String resource) {
-        ResourceCond resourceCond = mock(ResourceCond.class);
-        when(resourceCond.getResource()).thenReturn(resource);
+    return searchCond;
+  }
 
-        SearchCond searchCond = mock(SearchCond.class);
+  private SearchCond mockAndCond(
+    final SearchCond left,
+    final SearchCond right
+  ) {
+    SearchCond searchCond = mock(SearchCond.class);
 
-        when(searchCond.getType()).thenReturn(SearchCond.Type.LEAF);
-        when(searchCond.asLeaf(AuxClassCond.class)).thenReturn(Optional.empty());
-        when(searchCond.asLeaf(ResourceCond.class)).thenReturn(Optional.of(resourceCond));
-        when(searchCond.asLeaf(AnyCond.class)).thenReturn(Optional.empty());
-        when(searchCond.asLeaf(AttrCond.class)).thenReturn(Optional.empty());
+    when(searchCond.getType()).thenReturn(SearchCond.Type.AND);
+    when(searchCond.getLeft()).thenReturn(left);
+    when(searchCond.getRight()).thenReturn(right);
 
-        return searchCond;
-    }
+    return searchCond;
+  }
 
-    private SearchCond mockAndCond(final SearchCond left, final SearchCond right) {
-        SearchCond searchCond = mock(SearchCond.class);
+  private SearchCond mockOrCond(final SearchCond left, final SearchCond right) {
+    SearchCond searchCond = mock(SearchCond.class);
 
-        when(searchCond.getType()).thenReturn(SearchCond.Type.AND);
-        when(searchCond.getLeft()).thenReturn(left);
-        when(searchCond.getRight()).thenReturn(right);
+    when(searchCond.getType()).thenReturn(SearchCond.Type.OR);
+    when(searchCond.getLeft()).thenReturn(left);
+    when(searchCond.getRight()).thenReturn(right);
 
-        return searchCond;
-    }
+    return searchCond;
+  }
 
-    private SearchCond mockOrCond(final SearchCond left, final SearchCond right) {
-        SearchCond searchCond = mock(SearchCond.class);
-
-        when(searchCond.getType()).thenReturn(SearchCond.Type.OR);
-        when(searchCond.getLeft()).thenReturn(left);
-        when(searchCond.getRight()).thenReturn(right);
-
-        return searchCond;
-    }
-
-    private AttrCond mockAttrCond(final AttrCond.Type type, final String schemaName, final String expression) {
+  private AttrCond mockAttrCond(
+    final AttrCond.Type type,
+    final String schemaName,
+    final String expression
+  ) {
     AttrCond cond = mock(AttrCond.class);
 
     when(cond.getType()).thenReturn(type);
@@ -221,531 +243,69 @@ public class Neo4jRealmSearchDAOCFTest {
     when(cond.getExpression()).thenReturn(expression);
 
     return cond;
-}
+  }
 
+  //New methods added to cover the branches of Neo4jRealmSearchDAO that were not covered by the existing tests in Neo4jRealmSearchDAOTest.
 
-    /*
-     * TC1-TC9 focus on fillAttrQuery().
-     * This method is the most variable part of the class because its output
-     * depends on the operator, the schema type, the uniqueness constraint,
-     * the input value and the negation flag.
-     */
-
-    @Test
-    @DisplayName("TC1: Simple Equality (EQ), String, Unique Value, Not=False")
-    public void testTC1_EQ_String_Unique() {
-        TextStringBuilder query = new TextStringBuilder();
-        PlainSchema schema = mockSchema("city", AttrSchemaType.String, true);
-        AnyCond cond = mockCond(AnyCond.Type.EQ, "city", "Rome");
-        PlainAttrValue value = mockValue("Rome", null);
-
-        searchDAO.fillAttrQuery(query, value, schema, cond, false, parameters);
-
-        /*
-         * This is the nominal case: equality on a unique string field.
-         * The expected Cypher condition is a direct property comparison.
-         */
-        assertTrue(query.toString().contains("n.city=$param0"),
-                "TC1 failed: Basic EQ translation didn't work. Actual query: " + query);
-        assertEquals("Rome", parameters.get("param0"),
-                "TC1 failed: Parameter map does not contain the correct value.");
-    }
-
-    @Test
-    @DisplayName("TC2: Case-Insensitive Equality (IEQ), String, Unique Value, Not=False")
-    public void testTC2_EQ_WithRegex_String_Unique() {
-        TextStringBuilder query = new TextStringBuilder();
-        PlainSchema schema = mockSchema("city", AttrSchemaType.String, true);
-        AnyCond cond = mockCond(AnyCond.Type.IEQ, "city", "Rome");
-        PlainAttrValue value = mockValue("Rome", null);
-
-        searchDAO.fillAttrQuery(query, value, schema, cond, false, parameters);
-
-        /*
-         * IEQ belongs to the equality category, but it also requires
-         * case-insensitive comparison. For this reason both sides of the
-         * comparison must be converted with toLower().
-         */
-        assertTrue(query.toString().contains("toLower (n.city)=toLower($param0)"),
-                "TC2 failed: System didn't apply case-insensitive logic. Actual query: " + query);
-        assertEquals("Rome", parameters.get("param0"));
-    }
-
-    @Test
-    @DisplayName("TC3: Greater Than (GT), Long, Multivalued, Not=False")
-    public void testTC3_GT_Long_Multivalued() {
-        TextStringBuilder query = new TextStringBuilder();
-        PlainSchema schema = mockSchema("age", AttrSchemaType.Long, false);
-        AnyCond cond = mockCond(AnyCond.Type.GT, "age", "150");
-        PlainAttrValue value = mockValue("150", null);
-
-        searchDAO.fillAttrQuery(query, value, schema, cond, false, parameters);
-
-        /*
-         * This test covers a relational operator on a numeric schema.
-         * The value must be handled as a parameter and the operator must be
-         * translated into the corresponding Cypher comparison.
-         */
-        assertTrue(query.toString().contains("n.age>$param0"),
-                "TC3 failed: Greater-than operator translation is broken. Actual query: " + query);
-        assertEquals("150", parameters.get("param0"));
-    }
-
-    @Test
-    @DisplayName("TC4: Null Check (ISNULL), Multivalued, Not=True")
-    public void testTC4_ISNULL_Multivalued_NotTrue() {
-        TextStringBuilder query = new TextStringBuilder();
-        PlainSchema schema = mockSchema("city", AttrSchemaType.String, false);
-        AnyCond cond = mockCond(AnyCond.Type.ISNULL, "city", null);
-
-        /*
-         * The method changes ISNULL into ISNOTNULL during the recursive
-         * handling of negation. The mock is configured to reproduce this
-         * sequence of calls.
-         */
-        when(cond.getType()).thenReturn(
-                AnyCond.Type.ISNULL,
-                AnyCond.Type.ISNOTNULL,
-                AnyCond.Type.ISNOTNULL);
-
-        PlainAttrValue value = mockValue(null, null);
-
-        searchDAO.fillAttrQuery(query, value, schema, cond, true, parameters);
-
-        /*
-         * This checks the behavior of the negation category for null checks.
-         */
-        assertTrue(query.toString().contains("NOT (n.city IS NOT NULL)"),
-                "TC4 failed: Recursive inversion of NOT on ISNULL is broken. Actual query: " + query);
-    }
-
-    @Test
-    @DisplayName("TC5: Less Than/Equal (LE), Date, Unique Value, Not=False")
-    public void testTC5_LE_Date_Unique() {
-        TextStringBuilder query = new TextStringBuilder();
-        PlainSchema schema = mockSchema("expirationDate", AttrSchemaType.Date, true);
-        AnyCond cond = mockCond(AnyCond.Type.LE, "expirationDate", null);
-
-        OffsetDateTime mockDate = OffsetDateTime.now();
-        PlainAttrValue value = mockValue(null, mockDate);
-
-        searchDAO.fillAttrQuery(query, value, schema, cond, false, parameters);
-
-        /*
-         * Date values follow a specific path because the value comes from
-         * getDateValue() and is formatted before being inserted into the query.
-         */
-        assertTrue(query.toString().contains("n.expirationDate<=") && query.toString().contains("param"),
-                "TC5 failed: ISO date formatting didn't work as expected. Actual query: " + query);
-    }
-
-    @Test
-    @DisplayName("TC6: Equality (EQ), Long, Invalid Value")
-    public void testTC6_EQ_Long_InvalidParsingFallback() {
-        TextStringBuilder query = new TextStringBuilder();
-        PlainSchema schema = mockSchema("age", AttrSchemaType.Long, true);
-        AnyCond cond = mockCond(AnyCond.Type.EQ, "age", "abc");
-        PlainAttrValue value = mockValue("abc", null);
-
-        searchDAO.fillAttrQuery(query, value, schema, cond, false, parameters);
-
-        /*
-         * This is a robustness test. The schema is numeric, but the value
-         * cannot be parsed as a Long. The method must not fail and must keep
-         * the raw value as query parameter.
-         */
-        assertTrue(query.toString().contains("n.age=$param0"),
-                "TC6 failed: Fallback property check is broken. Actual query: " + query);
-        assertEquals("abc", parameters.get("param0"));
-    }
-
-    @Test
-    @DisplayName("TC7: Equality (EQ), Boolean, Unique Value, Not=True")
-    public void testTC7_EQ_Boolean_Unique_NotTrue() {
-        TextStringBuilder query = new TextStringBuilder();
-        PlainSchema schema = mockSchema("isActive", AttrSchemaType.Boolean, true);
-        AnyCond cond = mockCond(AnyCond.Type.EQ, "isActive", "true");
-        PlainAttrValue value = mockValue("true", null);
-
-        searchDAO.fillAttrQuery(query, value, schema, cond, true, parameters);
-
-        /*
-         * This case verifies the negation of a normal equality condition
-         * on a unique boolean attribute.
-         */
-        assertTrue(query.toString().contains("NOT (n.isActive=$param0)"),
-                "TC7 failed: NOT clause wasn't applied correctly. Actual query: " + query);
-        assertEquals("true", parameters.get("param0"));
-    }
-
-    @Test
-    @DisplayName("TC8: Case-Insensitive Pattern Matching (ILIKE), String with Wildcard")
-    public void testTC8_ILIKE_String_WithWildcard() {
-        TextStringBuilder query = new TextStringBuilder();
-        PlainSchema schema = mockSchema("city", AttrSchemaType.String, true);
-        AnyCond cond = mockCond(AnyCond.Type.ILIKE, "city", "rome%");
-        PlainAttrValue value = mockValue("rome%", null);
-
-        searchDAO.fillAttrQuery(query, value, schema, cond, false, parameters);
-
-        /*
-         * ILIKE combines pattern matching and case-insensitive comparison.
-         * The wildcard symbol is translated into a regular expression pattern.
-         */
-        assertTrue(query.toString().contains("toLower (n.city) =~"),
-                "TC8 failed: ILIKE translation is broken. Actual query: " + query);
-        assertEquals("rome.*", parameters.get("param0"));
-    }
-
-    @Test
-    @DisplayName("TC9: LIKE on Long")
-    public void testTC9_LIKE_Long_IncompatibleTypeError() {
-        TextStringBuilder query = new TextStringBuilder();
-        PlainSchema schema = mockSchema("age", AttrSchemaType.Long, true);
-        AnyCond cond = mockCond(AnyCond.Type.LIKE, "age", "10%");
-        PlainAttrValue value = mockValue("10%", null);
-
-        searchDAO.fillAttrQuery(query, value, schema, cond, false, parameters);
-
-        /*
-         * LIKE is meaningful only for textual schemas. With a numeric schema
-         * the method must generate the always-false condition instead of
-         * producing an invalid search.
-         */
-        assertTrue(query.toString().contains("1=2"),
-                "TC9 failed: System didn't inject the ALWAYS_FALSE_CLAUSE. Actual query: " + query);
-    }
-
-    /*
-     * TC10-TC15 cover the public lookup methods of the DAO.
-     * These tests verify how the class validates paths, calls Neo4j and maps
-     * returned identifiers back to Realm objects through RealmDAO.
-     */
-
-    @Test
-    @DisplayName("TC10: findByFullPath - Root Realm Exists")
-    public void testTC10_findByFullPath_RootValid() {
-        Realm rootRealm = mock(Realm.class);
-
-        when(neo4jClient.query(anyString())
-                .bindAll(Map.of("fullPath", "/"))
-                .fetch()
-                .one())
-                .thenReturn(Optional.of(Map.of("n.id", "root-id")));
-
-        doReturn(Optional.of(rootRealm))
-                .when(realmDAO).findById("root-id");
-
-        Optional<Realm> result = searchDAO.findByFullPath("/");
-
-        /*
-         * The root path is a valid special case and must be accepted.
-         */
-        assertTrue(result.isPresent(),
-                "TC10 failed: findByFullPath('/') should return a present Optional.");
-        assertEquals(rootRealm, result.get(),
-                "TC10 failed: Returned Realm is not the expected root Realm.");
-    }
-
-    @Test
-    @DisplayName("TC11: findByFullPath - Malformed Path Throws Exception")
-    public void testTC11_findByFullPath_MalformedPath() {
-        /*
-         * A malformed path must be rejected before querying the database.
-         */
-        assertThrows(MalformedPathException.class,
-                () -> searchDAO.findByFullPath("odd/even"),
-                "TC11 failed: malformed path should throw MalformedPathException.");
-    }
-
-    @Test
-    @DisplayName("TC12: findByName - Multiple Matching Realms")
-    public void testTC12_findByName_MultipleResults() {
-        Realm realm1 = mock(Realm.class);
-        Realm realm2 = mock(Realm.class);
-
-        when(neo4jClient.query(anyString())
-                .bindAll(Map.of("name", "finance"))
-                .fetch()
-                .all())
-                .thenReturn(List.of(
-                        Map.of("n.id", "id-1"),
-                        Map.of("n.id", "id-2")));
-
-        doReturn(Optional.of(realm1))
-                .when(realmDAO).findById("id-1");
-
-        doReturn(Optional.of(realm2))
-                .when(realmDAO).findById("id-2");
-
-        List<Realm> result = searchDAO.findByName("finance");
-
-        /*
-         * This test checks the mapping from Neo4j result rows to Realm objects.
-         */
-        assertEquals(2, result.size(),
-                "TC12 failed: findByName should return two resolved realms.");
-        assertTrue(result.contains(realm1),
-                "TC12 failed: result does not contain first Realm.");
-        assertTrue(result.contains(realm2),
-                "TC12 failed: result does not contain second Realm.");
-    }
-
-    @Test
-    @DisplayName("TC13: findChildren - Multiple Children")
-    public void testTC13_findChildren_MultipleChildren() {
-        Realm parent = mock(Realm.class);
-        Realm child1 = mock(Realm.class);
-        Realm child2 = mock(Realm.class);
-
-        when(parent.getKey()).thenReturn("parent-id");
-
-        when(neo4jClient.query(anyString())
-                .bindAll(Map.of("id", "parent-id"))
-                .fetch()
-                .all())
-                .thenReturn(List.of(
-                        Map.of("c.id", "child-1"),
-                        Map.of("c.id", "child-2")));
-
-        doReturn(Optional.of(child1))
-                .when(realmDAO).findById("child-1");
-
-        doReturn(Optional.of(child2))
-                .when(realmDAO).findById("child-2");
-
-        List<Realm> result = searchDAO.findChildren(parent);
-
-        /*
-         * This verifies the direct parent-child navigation query.
-         */
-        assertEquals(2, result.size(),
-                "TC13 failed: findChildren should return two children.");
-        assertTrue(result.contains(child1),
-                "TC13 failed: result does not contain first child.");
-        assertTrue(result.contains(child2),
-                "TC13 failed: result does not contain second child.");
-    }
-
-    @Test
-    @DisplayName("TC14: findDescendants - Root Base Without Prefix")
-    public void testTC14_findDescendants_RootWithoutPrefix() {
-        when(neo4jClient.query(anyString())
-                .bindAll(argThat((Map<String, Object> params) ->
-                        "/".equals(params.get("base"))
-                                && "/.*".equals(params.get("like"))
-                                && !params.containsKey("prefix")
-                                && !params.containsKey("likePrefix")))
-                .fetch()
-                .all())
-                .thenReturn(List.of());
-
-        List<Realm> result = searchDAO.findDescendants("/", null);
-
-        /*
-         * The root realm uses a specific descendant pattern.
-         */
-        assertTrue(result.isEmpty(),
-                "TC14 failed: root descendants query should return an empty list in this mocked scenario.");
-    }
-
-    @Test
-    @DisplayName("TC15: findDescendants - Non Root Base With Prefix")
-    public void testTC15_findDescendants_WithPrefix() {
-        when(neo4jClient.query(anyString())
-                .bindAll(argThat((Map<String, Object> params) ->
-                        "/odd".equals(params.get("base"))
-                                && "/odd/.*".equals(params.get("like"))
-                                && "/odd/two".equals(params.get("prefix"))
-                                && "/odd/two/.*".equals(params.get("likePrefix"))))
-                .fetch()
-                .all())
-                .thenReturn(List.of());
-
-        List<Realm> result = searchDAO.findDescendants("/odd", "/odd/two");
-
-        /*
-         * This covers the case where both base and prefix restrict the search.
-         */
-        assertTrue(result.isEmpty(),
-                "TC15 failed: descendants with prefix should return an empty list in this mocked scenario.");
-    }
-
-    /*
-     * TC16 and TC17 cover compound SearchCond objects.
-     * The objective is to check that the generated query combines the two
-     * leaf conditions with the expected boolean operator.
-     */
-
-    @Test
-    @DisplayName("TC16: SearchCond AND - Combines Two Leaf Conditions")
-    public void testTC16_SearchCond_AND() {
-        SearchCond left = mockLeafAuxClassCond("classA");
-        SearchCond right = mockLeafResourceCond("resource-db");
-        SearchCond andCond = mockAndCond(left, right);
-
-        Map<String, Object> params = new HashMap<>();
-
-        Neo4jRealmSearchDAO.QueryInfo queryInfo = searchDAO.getQuery(andCond, params);
-
-        assertTrue(queryInfo.query().toString().contains(" AND EXISTS"),
-                "TC16 failed: AND condition was not translated into AND EXISTS. Actual query: "
-                        + queryInfo.query());
-        assertEquals(2, params.size(),
-                "TC16 failed: AND condition should generate two query parameters.");
-    }
-
-    @Test
-    @DisplayName("TC17: SearchCond OR - Combines Two Leaf Conditions")
-    public void testTC17_SearchCond_OR() {
-        SearchCond left = mockLeafAuxClassCond("classA");
-        SearchCond right = mockLeafResourceCond("resource-db");
-        SearchCond orCond = mockOrCond(left, right);
-
-        Map<String, Object> params = new HashMap<>();
-
-        Neo4jRealmSearchDAO.QueryInfo queryInfo = searchDAO.getQuery(orCond, params);
-
-        assertTrue(queryInfo.query().toString().contains(" OR EXISTS"),
-                "TC17 failed: OR condition was not translated into OR EXISTS. Actual query: "
-                        + queryInfo.query());
-        assertEquals(2, params.size(),
-                "TC17 failed: OR condition should generate two query parameters.");
-    }
-
-    /*
-     * TC18 and TC19 cover two final aspects of the search operation:
-     * ordering validation and pagination.
-     */
-
-    @Test
-    @DisplayName("TC18: parseOrderBy - Multiple Unique Plain Schemas Are Invalid")
-    public void testTC18_parseOrderBy_MultipleUniqueSchemasInvalid() {
-        PlainSchema schema1 = mockSchema("code1", AttrSchemaType.String, true);
-        PlainSchema schema2 = mockSchema("code2", AttrSchemaType.String, true);
-
-        when(realmUtils.getField(anyString())).thenReturn(Optional.empty());
-
-        doReturn(Optional.of(schema1))
-                .when(plainSchemaDAO).findById("code1");
-
-        doReturn(Optional.of(schema2))
-                .when(plainSchemaDAO).findById("code2");
-
-        /*
-         * The DAO does not allow ordering by more than one unique plain
-         * attribute. This test covers the invalid search parameter path.
-         */
-        assertThrows(SyncopeClientException.class,
-                () -> searchDAO.parseOrderBy(
-                        Streamable.of(
-                                Sort.Order.asc("code1"),
-                                Sort.Order.asc("code2"))),
-                "TC18 failed: ordering by more than one unique plain schema should throw SyncopeClientException.");
-    }
-
-    @Test
-    @DisplayName("TC19: doSearch - Paged Search Adds SKIP and LIMIT")
-    public void testTC19_doSearch_Paginated() {
-        searchDAO = new Neo4jRealmSearchDAO(
-                realmDAO,
-                plainSchemaDAO,
-                null,
-                null,
-                null,
-                null,
-                realmUtils,
-                neo4jTemplate,
-                neo4jClient) {
-
-            @Override
-            protected QueryInfo getQuery(final SearchCond cond, final Map<String, Object> parameters) {
-                parameters.put("param0", "odd");
-
-                TextStringBuilder query =
-                        new TextStringBuilder("MATCH (n) WHERE n.name=$param0 ");
-
-                return new QueryInfo(
-                        query,
-                        new HashSet<>(Set.of("name")),
-                        new HashSet<>());
-            }
-        };
-
-        SearchCond cond = mock(SearchCond.class);
-        Realm realm = mock(Realm.class);
-
-        when(realmUtils.getField("name")).thenReturn(Optional.of(mockRealmField()));
-
-        doReturn(Optional.empty())
-                .when(plainSchemaDAO).findById("name");
-
-        when(neo4jClient.query(argThat((String query) ->
-                query.contains("SKIP 20")
-                        && query.contains("LIMIT 10")))
-                .bindAll(anyMap())
-                .fetch()
-                .all())
-                .thenReturn(List.of(Map.of("id", "realm-id")));
-
-        doReturn(Optional.of(realm))
-                .when(realmDAO).findById("realm-id");
-
-        List<Realm> result = searchDAO.doSearch(
-                Set.of("/"),
-                cond,
-                PageRequest.of(2, 10, Sort.by(Sort.Order.asc("name"))));
-
-        /*
-         * Page number 2 with size 10 must produce SKIP 20 and LIMIT 10.
-         */
-        assertEquals(1, result.size(),
-                "TC19 failed: paginated search should return one resolved realm.");
-        assertEquals(realm, result.get(0),
-                "TC19 failed: returned realm is not the expected one.");
-    }
-
-    @Test
-@DisplayName("TC20: appendPlainAttrCond - Unique and Multivalued Branches")
-public void testTC20_appendPlainAttrCond_UniqueAndMultivaluedBranches() {
+  @Test
+  @DisplayName("TC20: appendPlainAttrCond - Unique and Multivalued Branches")
+  public void testTC20_appendPlainAttrCond_UniqueAndMultivaluedBranches() {
     TextStringBuilder uniqueQuery = new TextStringBuilder();
     PlainSchema uniqueSchema = mockSchema("city", AttrSchemaType.String, true);
 
     Neo4jRealmSearchDAO.appendPlainAttrCond(
-            uniqueQuery,
-            uniqueSchema,
-            " = \"Rome\"");
+      uniqueQuery,
+      uniqueSchema,
+      " = \"Rome\""
+    );
 
     /*
      * Unique plain attributes are translated as a direct property access.
      * This covers the true branch of schema.isUniqueConstraint().
      */
-    assertTrue(uniqueQuery.toString().contains("city."),
-            "TC20 failed: unique schema should use direct property access. Actual query: " + uniqueQuery);
-    assertTrue(uniqueQuery.toString().contains(" = \"Rome\""),
-            "TC20 failed: unique schema condition was not appended. Actual query: " + uniqueQuery);
+    assertTrue(
+      uniqueQuery.toString().contains("city."),
+      "TC20 failed: unique schema should use direct property access. Actual query: " +
+        uniqueQuery
+    );
+    assertTrue(
+      uniqueQuery.toString().contains(" = \"Rome\""),
+      "TC20 failed: unique schema condition was not appended. Actual query: " +
+        uniqueQuery
+    );
 
     TextStringBuilder multivaluedQuery = new TextStringBuilder();
-    PlainSchema multivaluedSchema = mockSchema("tags", AttrSchemaType.String, false);
+    PlainSchema multivaluedSchema = mockSchema(
+      "tags",
+      AttrSchemaType.String,
+      false
+    );
 
     Neo4jRealmSearchDAO.appendPlainAttrCond(
-            multivaluedQuery,
-            multivaluedSchema,
-            " = \"dev\"");
+      multivaluedQuery,
+      multivaluedSchema,
+      " = \"dev\""
+    );
 
     /*
      * Non-unique plain attributes are translated through an any(...) predicate.
      * This covers the false branch of schema.isUniqueConstraint().
      */
-    assertTrue(multivaluedQuery.toString().contains("any(k IN tags WHERE k."),
-            "TC20 failed: multivalued schema should use any(...). Actual query: " + multivaluedQuery);
-    assertTrue(multivaluedQuery.toString().contains(" = \"dev\")"),
-            "TC20 failed: multivalued schema condition was not appended. Actual query: " + multivaluedQuery);
-}
+    assertTrue(
+      multivaluedQuery.toString().contains("any(k IN tags WHERE k."),
+      "TC20 failed: multivalued schema should use any(...). Actual query: " +
+        multivaluedQuery
+    );
+    assertTrue(
+      multivaluedQuery.toString().contains(" = \"dev\")"),
+      "TC20 failed: multivalued schema condition was not appended. Actual query: " +
+        multivaluedQuery
+    );
+  }
 
-@Test
-@DisplayName("TC21: fillAttrQuery AttrCond - ISNOTNULL Branch")
-public void testTC21_fillAttrQuery_AttrCond_ISNOTNULL() {
+  @Test
+  @DisplayName("TC21: fillAttrQuery AttrCond - ISNOTNULL Branch")
+  public void testTC21_fillAttrQuery_AttrCond_ISNOTNULL() {
     TextStringBuilder query = new TextStringBuilder();
     PlainSchema schema = mockSchema("city", AttrSchemaType.String, true);
     AttrCond cond = mockAttrCond(AttrCond.Type.ISNOTNULL, "city", null);
@@ -756,13 +316,16 @@ public void testTC21_fillAttrQuery_AttrCond_ISNOTNULL() {
     /*
      * This covers the ISNOTNULL switch branch of the AttrCond overload.
      */
-    assertTrue(query.toString().contains("WHERE city IS NOT NULL"),
-            "TC21 failed: AttrCond ISNOTNULL was not translated correctly. Actual query: " + query);
-}
+    assertTrue(
+      query.toString().contains("WHERE city IS NOT NULL"),
+      "TC21 failed: AttrCond ISNOTNULL was not translated correctly. Actual query: " +
+        query
+    );
+  }
 
-@Test
-@DisplayName("TC22: fillAttrQuery AttrCond - NOT on Multivalued Equality")
-public void testTC22_fillAttrQuery_AttrCond_NotMultivaluedEQ() {
+  @Test
+  @DisplayName("TC22: fillAttrQuery AttrCond - NOT on Multivalued Equality")
+  public void testTC22_fillAttrQuery_AttrCond_NotMultivaluedEQ() {
     TextStringBuilder query = new TextStringBuilder();
     PlainSchema schema = mockSchema("city", AttrSchemaType.String, false);
     AttrCond cond = mockAttrCond(AttrCond.Type.EQ, "city", "Rome");
@@ -774,13 +337,16 @@ public void testTC22_fillAttrQuery_AttrCond_NotMultivaluedEQ() {
      * For non-unique attributes, negation is not rendered as WHERE NOT(...).
      * The method rewrites any(...) into a null-or-none(...) expression.
      */
-    assertTrue(query.toString().contains("city IS NULL OR none("),
-            "TC22 failed: NOT on multivalued AttrCond was not rewritten with none(...). Actual query: " + query);
-}
+    assertTrue(
+      query.toString().contains("city IS NULL OR none("),
+      "TC22 failed: NOT on multivalued AttrCond was not rewritten with none(...). Actual query: " +
+        query
+    );
+  }
 
-@Test
-@DisplayName("TC23: fillAttrQuery AttrCond - Case-Insensitive Equality")
-public void testTC23_fillAttrQuery_AttrCond_IEQ() {
+  @Test
+  @DisplayName("TC23: fillAttrQuery AttrCond - Case-Insensitive Equality")
+  public void testTC23_fillAttrQuery_AttrCond_IEQ() {
     TextStringBuilder query = new TextStringBuilder();
     PlainSchema schema = mockSchema("city", AttrSchemaType.String, true);
     AttrCond cond = mockAttrCond(AttrCond.Type.IEQ, "city", "Rome");
@@ -791,15 +357,21 @@ public void testTC23_fillAttrQuery_AttrCond_IEQ() {
     /*
      * IEQ on string schemas follows the regex branch and adds the (?i) flag.
      */
-    assertTrue(query.toString().contains("=~"),
-            "TC23 failed: IEQ should be translated as a regex comparison. Actual query: " + query);
-    assertTrue(query.toString().contains("(?i)"),
-            "TC23 failed: IEQ should add the case-insensitive regex flag. Actual query: " + query);
-}
+    assertTrue(
+      query.toString().contains("=~"),
+      "TC23 failed: IEQ should be translated as a regex comparison. Actual query: " +
+        query
+    );
+    assertTrue(
+      query.toString().contains("(?i)"),
+      "TC23 failed: IEQ should add the case-insensitive regex flag. Actual query: " +
+        query
+    );
+  }
 
-@Test
-@DisplayName("TC24: fillAttrQuery AttrCond - LIKE on Non-String Schema")
-public void testTC24_fillAttrQuery_AttrCond_LikeOnNonStringSchema() {
+  @Test
+  @DisplayName("TC24: fillAttrQuery AttrCond - LIKE on Non-String Schema")
+  public void testTC24_fillAttrQuery_AttrCond_LikeOnNonStringSchema() {
     TextStringBuilder query = new TextStringBuilder();
     PlainSchema schema = mockSchema("age", AttrSchemaType.Long, true);
     AttrCond cond = mockAttrCond(AttrCond.Type.LIKE, "age", "12%");
@@ -811,13 +383,16 @@ public void testTC24_fillAttrQuery_AttrCond_LikeOnNonStringSchema() {
      * LIKE is valid only for string-like schemas. For numeric schemas the DAO
      * deliberately emits the always-false clause.
      */
-    assertTrue(query.toString().contains("1=2"),
-            "TC24 failed: LIKE on a non-string schema should emit the always-false clause. Actual query: " + query);
-}
+    assertTrue(
+      query.toString().contains("1=2"),
+      "TC24 failed: LIKE on a non-string schema should emit the always-false clause. Actual query: " +
+        query
+    );
+  }
 
-@Test
-@DisplayName("TC25: getQuery SearchCond - NOT_LEAF Resource Condition")
-public void testTC25_getQuery_SearchCond_NotLeafResourceCond() {
+  @Test
+  @DisplayName("TC25: getQuery SearchCond - NOT_LEAF Resource Condition")
+  public void testTC25_getQuery_SearchCond_NotLeafResourceCond() {
     ResourceCond resourceCond = mock(ResourceCond.class);
     when(resourceCond.getResource()).thenReturn("resource-db");
 
@@ -825,303 +400,385 @@ public void testTC25_getQuery_SearchCond_NotLeafResourceCond() {
 
     when(searchCond.getType()).thenReturn(SearchCond.Type.NOT_LEAF);
     when(searchCond.asLeaf(AuxClassCond.class)).thenReturn(Optional.empty());
-    when(searchCond.asLeaf(ResourceCond.class)).thenReturn(Optional.of(resourceCond));
+    when(searchCond.asLeaf(ResourceCond.class)).thenReturn(
+      Optional.of(resourceCond)
+    );
     when(searchCond.asLeaf(AnyCond.class)).thenReturn(Optional.empty());
     when(searchCond.asLeaf(AttrCond.class)).thenReturn(Optional.empty());
 
     Map<String, Object> params = new HashMap<>();
 
-    Neo4jRealmSearchDAO.QueryInfo queryInfo = searchDAO.getQuery(searchCond, params);
+    Neo4jRealmSearchDAO.QueryInfo queryInfo = searchDAO.getQuery(
+      searchCond,
+      params
+    );
 
     /*
      * This covers the NOT_LEAF path and the not=true branch in resource queries.
      */
-    assertTrue(queryInfo.query().toString().contains("WHERE NOT (n)-[]-"),
-            "TC25 failed: NOT_LEAF resource condition was not negated correctly. Actual query: "
-                    + queryInfo.query());
-    assertEquals(1, params.size(),
-            "TC25 failed: resource condition should generate exactly one query parameter.");
-}
+    assertTrue(
+      queryInfo.query().toString().contains("WHERE NOT (n)-[]-"),
+      "TC25 failed: NOT_LEAF resource condition was not negated correctly. Actual query: " +
+        queryInfo.query()
+    );
+    assertEquals(
+      1,
+      params.size(),
+      "TC25 failed: resource condition should generate exactly one query parameter."
+    );
+  }
 
-@Test
-@DisplayName("TC26: wrapQuery - Query Not Starting With MATCH")
-public void testTC26_wrapQuery_QueryNotStartingWithMatch() {
+  @Test
+  @DisplayName("TC26: wrapQuery - Query Not Starting With MATCH")
+  public void testTC26_wrapQuery_QueryNotStartingWithMatch() {
     Map<String, Object> params = new HashMap<>();
     params.put("param0", "odd");
 
     Neo4jRealmSearchDAO.QueryInfo queryInfo = new Neo4jRealmSearchDAO.QueryInfo(
-            new TextStringBuilder("WHERE EXISTS { MATCH (n) WHERE n.name = $param0 } "),
-            new HashSet<>(),
-            new HashSet<>());
+      new TextStringBuilder(
+        "WHERE EXISTS { MATCH (n) WHERE n.name = $param0 } "
+      ),
+      new HashSet<>(),
+      new HashSet<>()
+    );
 
-    searchDAO.wrapQuery(
-            Set.of("/odd"),
-            queryInfo,
-            Streamable.empty(),
-            params);
+    searchDAO.wrapQuery(Set.of("/odd"), queryInfo, Streamable.empty(), params);
 
     /*
      * This covers the else branch in wrapQuery(), where the incoming query
      * does not start with MATCH (n).
      */
-    assertTrue(queryInfo.query().toString().contains("WHERE (EXISTS"),
-            "TC26 failed: WHERE EXISTS should have been wrapped as WHERE (EXISTS. Actual query: "
-                    + queryInfo.query());
-    assertEquals("/odd", params.get("base1"),
-            "TC26 failed: base parameter was not generated correctly.");
-    assertEquals("/odd/.*", params.get("like1"),
-            "TC26 failed: like parameter was not generated correctly.");
-}
+    assertTrue(
+      queryInfo.query().toString().contains("WHERE (EXISTS"),
+      "TC26 failed: WHERE EXISTS should have been wrapped as WHERE (EXISTS. Actual query: " +
+        queryInfo.query()
+    );
+    assertEquals(
+      "/odd",
+      params.get("base1"),
+      "TC26 failed: base parameter was not generated correctly."
+    );
+    assertEquals(
+      "/odd/.*",
+      params.get("like1"),
+      "TC26 failed: like parameter was not generated correctly."
+    );
+  }
 
-@Test
-@DisplayName("TC27: doCount - Builds Count Query")
-public void testTC27_doCount_BuildsCountQuery() {
+  @Test
+  @DisplayName("TC27: doCount - Builds Count Query")
+  public void testTC27_doCount_BuildsCountQuery() {
     searchDAO = new Neo4jRealmSearchDAO(
-            realmDAO,
-            plainSchemaDAO,
-            null,
-            null,
-            null,
-            null,
-            realmUtils,
-            neo4jTemplate,
-            neo4jClient) {
+      realmDAO,
+      plainSchemaDAO,
+      null,
+      null,
+      null,
+      null,
+      realmUtils,
+      neo4jTemplate,
+      neo4jClient
+    ) {
+      @Override
+      protected QueryInfo getQuery(
+        final SearchCond cond,
+        final Map<String, Object> parameters
+      ) {
+        parameters.put("param0", "odd");
 
-        @Override
-        protected QueryInfo getQuery(final SearchCond cond, final Map<String, Object> parameters) {
-            parameters.put("param0", "odd");
-
-            return new QueryInfo(
-                    new TextStringBuilder("MATCH (n) WHERE n.name=$param0 "),
-                    new HashSet<>(),
-                    new HashSet<>());
-        }
+        return new QueryInfo(
+          new TextStringBuilder("MATCH (n) WHERE n.name=$param0 "),
+          new HashSet<>(),
+          new HashSet<>()
+        );
+      }
     };
 
     SearchCond cond = mock(SearchCond.class);
 
-    when(neo4jTemplate.count(argThat((String query) ->
-            query.contains("RETURN COUNT(id)")
-                    && query.contains("base1")
-                    && query.contains("like1")), anyMap()))
-            .thenReturn(3L);
+    when(
+      neo4jTemplate.count(
+        argThat(
+          (String query) ->
+            query.contains("RETURN COUNT(id)") &&
+            query.contains("base1") &&
+            query.contains("like1")
+        ),
+        anyMap()
+      )
+    ).thenReturn(3L);
 
     long result = searchDAO.doCount(Set.of("/"), cond);
 
     /*
      * doCount() must wrap the search query and append RETURN COUNT(id).
      */
-    assertEquals(3L, result,
-            "TC27 failed: doCount should return the value produced by Neo4jTemplate.count().");
-}
+    assertEquals(
+      3L,
+      result,
+      "TC27 failed: doCount should return the value produced by Neo4jTemplate.count()."
+    );
+  }
 
-@Test
-@DisplayName("TC28: doSearch - Unpaged Search Does Not Add SKIP or LIMIT")
-public void testTC28_doSearch_Unpaged() {
+  @Test
+  @DisplayName("TC28: doSearch - Unpaged Search Does Not Add SKIP or LIMIT")
+  public void testTC28_doSearch_Unpaged() {
     searchDAO = new Neo4jRealmSearchDAO(
-            realmDAO,
-            plainSchemaDAO,
-            null,
-            null,
-            null,
-            null,
-            realmUtils,
-            neo4jTemplate,
-            neo4jClient) {
+      realmDAO,
+      plainSchemaDAO,
+      null,
+      null,
+      null,
+      null,
+      realmUtils,
+      neo4jTemplate,
+      neo4jClient
+    ) {
+      @Override
+      protected QueryInfo getQuery(
+        final SearchCond cond,
+        final Map<String, Object> parameters
+      ) {
+        parameters.put("param0", "odd");
 
-        @Override
-        protected QueryInfo getQuery(final SearchCond cond, final Map<String, Object> parameters) {
-            parameters.put("param0", "odd");
-
-            return new QueryInfo(
-                    new TextStringBuilder("MATCH (n) WHERE n.name=$param0 "),
-                    new HashSet<>(),
-                    new HashSet<>());
-        }
+        return new QueryInfo(
+          new TextStringBuilder("MATCH (n) WHERE n.name=$param0 "),
+          new HashSet<>(),
+          new HashSet<>()
+        );
+      }
     };
 
     SearchCond cond = mock(SearchCond.class);
 
-    when(neo4jClient.query(argThat((String query) ->
-            query.contains("RETURN id")
-                    && !query.contains("SKIP")
-                    && !query.contains("LIMIT")))
-            .bindAll(anyMap())
-            .fetch()
-            .all())
-            .thenReturn(List.of());
+    when(
+      neo4jClient
+        .query(
+          argThat(
+            (String query) ->
+              query.contains("RETURN id") &&
+              !query.contains("SKIP") &&
+              !query.contains("LIMIT")
+          )
+        )
+        .bindAll(anyMap())
+        .fetch()
+        .all()
+    ).thenReturn(List.of());
 
     List<Realm> result = searchDAO.doSearch(
-            Set.of("/"),
-            cond,
-            org.springframework.data.domain.Pageable.unpaged());
+      Set.of("/"),
+      cond,
+      org.springframework.data.domain.Pageable.unpaged()
+    );
 
     /*
      * This covers the false branch of pageable.isPaged().
      */
-    assertTrue(result.isEmpty(),
-            "TC28 failed: unpaged mocked search should return an empty result list.");
-}
+    assertTrue(
+      result.isEmpty(),
+      "TC28 failed: unpaged mocked search should return an empty result list."
+    );
+  }
 
-@Test
-@DisplayName("TC29: parseOrderBy - Multiple Non-Unique Plain Schemas Are Invalid")
-public void testTC29_parseOrderBy_MultipleNonUniqueSchemasInvalid() {
+  @Test
+  @DisplayName(
+    "TC29: parseOrderBy - Multiple Non-Unique Plain Schemas Are Invalid"
+  )
+  public void testTC29_parseOrderBy_MultipleNonUniqueSchemasInvalid() {
     PlainSchema schema1 = mockSchema("tag1", AttrSchemaType.String, false);
     PlainSchema schema2 = mockSchema("tag2", AttrSchemaType.String, false);
 
     when(realmUtils.getField(anyString())).thenReturn(Optional.empty());
 
-    doReturn(Optional.of(schema1))
-            .when(plainSchemaDAO).findById("tag1");
+    doReturn(Optional.of(schema1)).when(plainSchemaDAO).findById("tag1");
 
-    doReturn(Optional.of(schema2))
-            .when(plainSchemaDAO).findById("tag2");
+    doReturn(Optional.of(schema2)).when(plainSchemaDAO).findById("tag2");
 
     /*
      * TC18 already covers multiple unique schemas. This test covers the
      * symmetric invalid path for multiple non-unique schemas.
      */
-    assertThrows(SyncopeClientException.class,
-            () -> searchDAO.parseOrderBy(
-                    Streamable.of(
-                            Sort.Order.asc("tag1"),
-                            Sort.Order.asc("tag2"))),
-            "TC29 failed: ordering by more than one non-unique plain schema should throw SyncopeClientException.");
-}
+    assertThrows(
+      SyncopeClientException.class,
+      () ->
+        searchDAO.parseOrderBy(
+          Streamable.of(Sort.Order.asc("tag1"), Sort.Order.asc("tag2"))
+        ),
+      "TC29 failed: ordering by more than one non-unique plain schema should throw SyncopeClientException."
+    );
+  }
 
-@Test
-@DisplayName("TC30: escapeIfString - Both String and Non-String Branches")
-public void testTC30_escapeIfString_BothBranches() {
+  @Test
+  @DisplayName("TC30: escapeIfString - Both String and Non-String Branches")
+  public void testTC30_escapeIfString_BothBranches() {
     String escaped = Neo4jRealmSearchDAO.escapeIfString("Rome", true);
     String notEscaped = Neo4jRealmSearchDAO.escapeIfString("42", false);
 
-    assertEquals("\"Rome\"", escaped,
-            "TC30 failed: string values should be wrapped with double quotes.");
-    assertEquals("42", notEscaped,
-            "TC30 failed: non-string values should not be wrapped.");
-}
+    assertEquals(
+      "\"Rome\"",
+      escaped,
+      "TC30 failed: string values should be wrapped with double quotes."
+    );
+    assertEquals(
+      "42",
+      notEscaped,
+      "TC30 failed: non-string values should not be wrapped."
+    );
+  }
 
-@Test
-@DisplayName("TC31: findByFullPath - Blank Path Throws MalformedPathException")
-public void testTC31_findByFullPath_BlankPath() {
-    assertThrows(MalformedPathException.class,
-            () -> searchDAO.findByFullPath(" "),
-            "TC31 failed: blank path should throw MalformedPathException.");
-}
+  @Test
+  @DisplayName(
+    "TC31: findByFullPath - Blank Path Throws MalformedPathException"
+  )
+  public void testTC31_findByFullPath_BlankPath() {
+    assertThrows(
+      MalformedPathException.class,
+      () -> searchDAO.findByFullPath(" "),
+      "TC31 failed: blank path should throw MalformedPathException."
+    );
+  }
 
-@Test
-@DisplayName("TC32: findByFullPath - No Result Returns Empty Optional")
-public void testTC32_findByFullPath_NoResult() {
-    when(neo4jClient.query(anyString())
-            .bindAll(anyMap())
-            .fetch()
-            .one())
-            .thenReturn(Optional.empty());
+  @Test
+  @DisplayName("TC32: findByFullPath - No Result Returns Empty Optional")
+  public void testTC32_findByFullPath_NoResult() {
+    when(
+      neo4jClient.query(anyString()).bindAll(anyMap()).fetch().one()
+    ).thenReturn(Optional.empty());
 
     Optional<Realm> result = searchDAO.findByFullPath("/missing");
 
-    assertTrue(result.isEmpty(),
-            "TC32 failed: missing full path should return Optional.empty().");
-}
+    assertTrue(
+      result.isEmpty(),
+      "TC32 failed: missing full path should return Optional.empty()."
+    );
+  }
 
-@Test
-@DisplayName("TC33: getQuery SearchCond - NOT_LEAF AuxClass Condition")
-public void testTC33_getQuery_SearchCond_NotLeafAuxClassCond() {
+  @Test
+  @DisplayName("TC33: getQuery SearchCond - NOT_LEAF AuxClass Condition")
+  public void testTC33_getQuery_SearchCond_NotLeafAuxClassCond() {
     AuxClassCond auxClassCond = mock(AuxClassCond.class);
     when(auxClassCond.getAuxClass()).thenReturn("classA");
 
     SearchCond searchCond = mock(SearchCond.class);
 
     when(searchCond.getType()).thenReturn(SearchCond.Type.NOT_LEAF);
-    when(searchCond.asLeaf(AuxClassCond.class)).thenReturn(Optional.of(auxClassCond));
+    when(searchCond.asLeaf(AuxClassCond.class)).thenReturn(
+      Optional.of(auxClassCond)
+    );
     when(searchCond.asLeaf(ResourceCond.class)).thenReturn(Optional.empty());
     when(searchCond.asLeaf(AnyCond.class)).thenReturn(Optional.empty());
     when(searchCond.asLeaf(AttrCond.class)).thenReturn(Optional.empty());
 
     Map<String, Object> params = new HashMap<>();
 
-    Neo4jRealmSearchDAO.QueryInfo queryInfo = searchDAO.getQuery(searchCond, params);
+    Neo4jRealmSearchDAO.QueryInfo queryInfo = searchDAO.getQuery(
+      searchCond,
+      params
+    );
 
-    assertTrue(queryInfo.query().toString().contains("WHERE NOT (n)-[]-"),
-            "TC33 failed: NOT_LEAF AuxClassCond should generate a negated relationship query. Actual query: "
-                    + queryInfo.query());
-    assertEquals(1, params.size(),
-            "TC33 failed: NOT_LEAF AuxClassCond should generate one parameter.");
-}
+    assertTrue(
+      queryInfo.query().toString().contains("WHERE NOT (n)-[]-"),
+      "TC33 failed: NOT_LEAF AuxClassCond should generate a negated relationship query. Actual query: " +
+        queryInfo.query()
+    );
+    assertEquals(
+      1,
+      params.size(),
+      "TC33 failed: NOT_LEAF AuxClassCond should generate one parameter."
+    );
+  }
 
-@Test
-@DisplayName("TC34: wrapQuery - Order By Id Does Not Add Extra Field")
-public void testTC34_wrapQuery_OrderByIdDoesNotAddExtraField() {
+  @Test
+  @DisplayName("TC34: wrapQuery - Order By Id Does Not Add Extra Field")
+  public void testTC34_wrapQuery_OrderByIdDoesNotAddExtraField() {
     Map<String, Object> params = new HashMap<>();
     params.put("param0", "odd");
 
     Neo4jRealmSearchDAO.QueryInfo queryInfo = new Neo4jRealmSearchDAO.QueryInfo(
-            new TextStringBuilder("MATCH (n) WHERE n.name=$param0 "),
-            new HashSet<>(),
-            new HashSet<>());
+      new TextStringBuilder("MATCH (n) WHERE n.name=$param0 "),
+      new HashSet<>(),
+      new HashSet<>()
+    );
 
     searchDAO.wrapQuery(
-            Set.of("/"),
-            queryInfo,
-            Streamable.of(Sort.Order.asc("id")),
-            params);
+      Set.of("/"),
+      queryInfo,
+      Streamable.of(Sort.Order.asc("id")),
+      params
+    );
 
     /*
      * The initial WITH n.id AS id is always present.
      * The important point is that id must not be added again as ", n.id AS id".
      */
-    assertTrue(!queryInfo.query().toString().contains(", n.id AS id"),
-            "TC34 failed: ordering by id should not add id as an extra selected field. Actual query: "
-                    + queryInfo.query());
-}
+    assertTrue(
+      !queryInfo.query().toString().contains(", n.id AS id"),
+      "TC34 failed: ordering by id should not add id as an extra selected field. Actual query: " +
+        queryInfo.query()
+    );
+  }
 
-@Test
-@DisplayName("TC35: wrapQuery - Unknown Order Field Is Ignored As Realm Field")
-public void testTC35_wrapQuery_UnknownOrderField() {
+  @Test
+  @DisplayName(
+    "TC35: wrapQuery - Unknown Order Field Is Ignored As Realm Field"
+  )
+  public void testTC35_wrapQuery_UnknownOrderField() {
     Map<String, Object> params = new HashMap<>();
     params.put("param0", "odd");
 
     when(realmUtils.getField("unknown")).thenReturn(Optional.empty());
 
-    doReturn(Optional.empty())
-            .when(plainSchemaDAO).findById("unknown");
+    doReturn(Optional.empty()).when(plainSchemaDAO).findById("unknown");
 
     Neo4jRealmSearchDAO.QueryInfo queryInfo = new Neo4jRealmSearchDAO.QueryInfo(
-            new TextStringBuilder("MATCH (n) WHERE n.name=$param0 "),
-            new HashSet<>(),
-            new HashSet<>());
+      new TextStringBuilder("MATCH (n) WHERE n.name=$param0 "),
+      new HashSet<>(),
+      new HashSet<>()
+    );
 
     searchDAO.wrapQuery(
-            Set.of("/"),
-            queryInfo,
-            Streamable.of(Sort.Order.asc("unknown")),
-            params);
+      Set.of("/"),
+      queryInfo,
+      Streamable.of(Sort.Order.asc("unknown")),
+      params
+    );
 
-    assertTrue(!queryInfo.query().toString().contains(" AS unknown"),
-            "TC35 failed: unknown order field should not be added to the WITH clause. Actual query: "
-                    + queryInfo.query());
-}
+    assertTrue(
+      !queryInfo.query().toString().contains(" AS unknown"),
+      "TC35 failed: unknown order field should not be added to the WITH clause. Actual query: " +
+        queryInfo.query()
+    );
+  }
 
-@Test
-@DisplayName("TC36: findDescendants - Root Prefix Uses Root Regex")
-public void testTC36_findDescendants_RootPrefix() {
-    when(neo4jClient.query(anyString())
-            .bindAll(argThat((Map<String, Object> map) ->
-                    "/".equals(map.get("prefix"))
-                            && "/.*".equals(map.get("likePrefix"))))
-            .fetch()
-            .all())
-            .thenReturn(List.of());
+  @Test
+  @DisplayName("TC36: findDescendants - Root Prefix Uses Root Regex")
+  public void testTC36_findDescendants_RootPrefix() {
+    when(
+      neo4jClient
+        .query(anyString())
+        .bindAll(
+          argThat(
+            (Map<String, Object> map) ->
+              "/".equals(map.get("prefix")) &&
+              "/.*".equals(map.get("likePrefix"))
+          )
+        )
+        .fetch()
+        .all()
+    ).thenReturn(List.of());
 
     List<Realm> result = searchDAO.findDescendants("/odd", "/");
 
-    assertTrue(result.isEmpty(),
-            "TC36 failed: mocked descendants with root prefix should return an empty list.");
-}
+    assertTrue(
+      result.isEmpty(),
+      "TC36 failed: mocked descendants with root prefix should return an empty list."
+    );
+  }
 
-@Test
-@DisplayName("TC37: fillAttrQuery AttrCond - ISNULL Branch")
-public void testTC37_fillAttrQuery_AttrCond_ISNULL() {
+  @Test
+  @DisplayName("TC37: fillAttrQuery AttrCond - ISNULL Branch")
+  public void testTC37_fillAttrQuery_AttrCond_ISNULL() {
     TextStringBuilder query = new TextStringBuilder();
     PlainSchema schema = mockSchema("city", AttrSchemaType.String, true);
     AttrCond cond = mockAttrCond(AttrCond.Type.ISNULL, "city", null);
@@ -1129,13 +786,17 @@ public void testTC37_fillAttrQuery_AttrCond_ISNULL() {
 
     searchDAO.fillAttrQuery(query, value, schema, cond, false, parameters);
 
-    assertEquals("WHERE ", query.toString(),
-            "TC37 failed: AttrCond ISNULL branch should leave only the WHERE prefix. Actual query: " + query);
-}
+    assertEquals(
+      "WHERE ",
+      query.toString(),
+      "TC37 failed: AttrCond ISNULL branch should leave only the WHERE prefix. Actual query: " +
+        query
+    );
+  }
 
-@Test
-@DisplayName("TC38: fillAttrQuery AttrCond - GE Double Value")
-public void testTC38_fillAttrQuery_AttrCond_GE_Double() {
+  @Test
+  @DisplayName("TC38: fillAttrQuery AttrCond - GE Double Value")
+  public void testTC38_fillAttrQuery_AttrCond_GE_Double() {
     TextStringBuilder query = new TextStringBuilder();
     PlainSchema schema = mockSchema("score", AttrSchemaType.Double, true);
     AttrCond cond = mockAttrCond(AttrCond.Type.GE, "score", "12.5");
@@ -1143,13 +804,16 @@ public void testTC38_fillAttrQuery_AttrCond_GE_Double() {
 
     searchDAO.fillAttrQuery(query, value, schema, cond, false, parameters);
 
-    assertTrue(query.toString().contains(" >= 12.5"),
-            "TC38 failed: valid Double value should be rendered without quotes. Actual query: " + query);
-}
+    assertTrue(
+      query.toString().contains(" >= 12.5"),
+      "TC38 failed: valid Double value should be rendered without quotes. Actual query: " +
+        query
+    );
+  }
 
-@Test
-@DisplayName("TC39: fillAttrQuery AttrCond - LT Long Value")
-public void testTC39_fillAttrQuery_AttrCond_LT_Long() {
+  @Test
+  @DisplayName("TC39: fillAttrQuery AttrCond - LT Long Value")
+  public void testTC39_fillAttrQuery_AttrCond_LT_Long() {
     TextStringBuilder query = new TextStringBuilder();
     PlainSchema schema = mockSchema("age", AttrSchemaType.Long, true);
     AttrCond cond = mockAttrCond(AttrCond.Type.LT, "age", "42");
@@ -1157,13 +821,16 @@ public void testTC39_fillAttrQuery_AttrCond_LT_Long() {
 
     searchDAO.fillAttrQuery(query, value, schema, cond, false, parameters);
 
-    assertTrue(query.toString().contains(" < 42"),
-            "TC39 failed: LT Long value should be rendered without quotes. Actual query: " + query);
-        }
+    assertTrue(
+      query.toString().contains(" < 42"),
+      "TC39 failed: LT Long value should be rendered without quotes. Actual query: " +
+        query
+    );
+  }
 
-@Test
-@DisplayName("TC40: fillAttrQuery AttrCond - Valid Boolean Value")
-public void testTC40_fillAttrQuery_AttrCond_EQ_ValidBoolean() {
+  @Test
+  @DisplayName("TC40: fillAttrQuery AttrCond - Valid Boolean Value")
+  public void testTC40_fillAttrQuery_AttrCond_EQ_ValidBoolean() {
     TextStringBuilder query = new TextStringBuilder();
     PlainSchema schema = mockSchema("active", AttrSchemaType.Boolean, true);
     AttrCond cond = mockAttrCond(AttrCond.Type.EQ, "active", "false");
@@ -1171,36 +838,59 @@ public void testTC40_fillAttrQuery_AttrCond_EQ_ValidBoolean() {
 
     searchDAO.fillAttrQuery(query, value, schema, cond, false, parameters);
 
-    assertTrue(query.toString().contains(" = false"),
-            "TC40 failed: valid Boolean value should be rendered without quotes. Actual query: " + query);
-}
+    assertTrue(
+      query.toString().contains(" = false"),
+      "TC40 failed: valid Boolean value should be rendered without quotes. Actual query: " +
+        query
+    );
+  }
 
-@Test
-@DisplayName("TC41: fillAttrQuery AnyCond - ISNULL and ISNOTNULL Branches")
-public void testTC41_fillAttrQuery_AnyCond_NullBranches() {
+  @Test
+  @DisplayName("TC41: fillAttrQuery AnyCond - ISNULL and ISNOTNULL Branches")
+  public void testTC41_fillAttrQuery_AnyCond_NullBranches() {
     PlainSchema schema = mockSchema("city", AttrSchemaType.String, true);
     PlainAttrValue value = mockValue(null, null);
 
     TextStringBuilder isNullQuery = new TextStringBuilder();
     AnyCond isNullCond = mockCond(AnyCond.Type.ISNULL, "city", null);
 
-    searchDAO.fillAttrQuery(isNullQuery, value, schema, isNullCond, false, parameters);
+    searchDAO.fillAttrQuery(
+      isNullQuery,
+      value,
+      schema,
+      isNullCond,
+      false,
+      parameters
+    );
 
-    assertTrue(isNullQuery.toString().contains("n.city IS NULL"),
-            "TC41 failed: AnyCond ISNULL was not translated correctly. Actual query: " + isNullQuery);
+    assertTrue(
+      isNullQuery.toString().contains("n.city IS NULL"),
+      "TC41 failed: AnyCond ISNULL was not translated correctly. Actual query: " +
+        isNullQuery
+    );
 
     TextStringBuilder isNotNullQuery = new TextStringBuilder();
     AnyCond isNotNullCond = mockCond(AnyCond.Type.ISNOTNULL, "city", null);
 
-    searchDAO.fillAttrQuery(isNotNullQuery, value, schema, isNotNullCond, false, new HashMap<>());
+    searchDAO.fillAttrQuery(
+      isNotNullQuery,
+      value,
+      schema,
+      isNotNullCond,
+      false,
+      new HashMap<>()
+    );
 
-    assertTrue(isNotNullQuery.toString().contains("n.city IS NOT NULL"),
-            "TC41 failed: AnyCond ISNOTNULL was not translated correctly. Actual query: " + isNotNullQuery);
-}
+    assertTrue(
+      isNotNullQuery.toString().contains("n.city IS NOT NULL"),
+      "TC41 failed: AnyCond ISNOTNULL was not translated correctly. Actual query: " +
+        isNotNullQuery
+    );
+  }
 
-@Test
-@DisplayName("TC42: fillAttrQuery AnyCond - GE and LT Branches")
-public void testTC42_fillAttrQuery_AnyCond_GE_And_LT() {
+  @Test
+  @DisplayName("TC42: fillAttrQuery AnyCond - GE and LT Branches")
+  public void testTC42_fillAttrQuery_AnyCond_GE_And_LT() {
     PlainSchema schema = mockSchema("age", AttrSchemaType.Long, true);
 
     TextStringBuilder geQuery = new TextStringBuilder();
@@ -1210,10 +900,16 @@ public void testTC42_fillAttrQuery_AnyCond_GE_And_LT() {
 
     searchDAO.fillAttrQuery(geQuery, geValue, schema, geCond, false, geParams);
 
-    assertTrue(geQuery.toString().contains("n.age>=$param0"),
-            "TC42 failed: AnyCond GE was not translated correctly. Actual query: " + geQuery);
-    assertEquals("18", geParams.get("param0"),
-            "TC42 failed: GE parameter was not stored correctly.");
+    assertTrue(
+      geQuery.toString().contains("n.age>=$param0"),
+      "TC42 failed: AnyCond GE was not translated correctly. Actual query: " +
+        geQuery
+    );
+    assertEquals(
+      "18",
+      geParams.get("param0"),
+      "TC42 failed: GE parameter was not stored correctly."
+    );
 
     TextStringBuilder ltQuery = new TextStringBuilder();
     Map<String, Object> ltParams = new HashMap<>();
@@ -1222,10 +918,15 @@ public void testTC42_fillAttrQuery_AnyCond_GE_And_LT() {
 
     searchDAO.fillAttrQuery(ltQuery, ltValue, schema, ltCond, false, ltParams);
 
-    assertTrue(ltQuery.toString().contains("n.age<$param0"),
-            "TC42 failed: AnyCond LT was not translated correctly. Actual query: " + ltQuery);
-    assertEquals("65", ltParams.get("param0"),
-            "TC42 failed: LT parameter was not stored correctly.");
-}
-
+    assertTrue(
+      ltQuery.toString().contains("n.age<$param0"),
+      "TC42 failed: AnyCond LT was not translated correctly. Actual query: " +
+        ltQuery
+    );
+    assertEquals(
+      "65",
+      ltParams.get("param0"),
+      "TC42 failed: LT parameter was not stored correctly."
+    );
+  }
 }
