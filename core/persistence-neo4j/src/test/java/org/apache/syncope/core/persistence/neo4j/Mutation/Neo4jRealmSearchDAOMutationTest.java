@@ -218,6 +218,11 @@ public class Neo4jRealmSearchDAOMutationTest {
   @Test
   @DisplayName("MT1: AnyCond leaf populates query and involved fields")
   public void testMT1_GetQuery_AnyCondPopulatesFields() {
+    /*
+     * Basic AnyCond case: checks that the query is generated,
+     * the field is tracked and the parameter is set correctly.
+     */
+
     AnyCond anyCond = mock(AnyCond.class);
 
     when(anyCond.getSchema()).thenReturn("name");
@@ -267,6 +272,10 @@ public class Neo4jRealmSearchDAOMutationTest {
   @Test
   @DisplayName("MT2: AttrCond leaf populates plain schemas")
   public void testMT2_GetQuery_AttrCondPopulatesPlainSchemas() {
+    /*
+     * Verifies that AttrCond resolves a plain schema and
+     * adds it to the QueryInfo correctly.
+     */
     AttrCond attrCond = mockAttrCond(AttrCond.Type.EQ, "city", "Rome");
 
     PlainSchema schema = mockSchema("city", AttrSchemaType.String, true);
@@ -294,6 +303,11 @@ public class Neo4jRealmSearchDAOMutationTest {
   @Test
   @DisplayName("MT3: queryOp builds both EXISTS clauses")
   public void testMT3_QueryOp_BuildsExistsClauses() {
+    /*
+     * Ensures queryOp combines two queries using EXISTS
+     * and the given boolean operator.
+     */
+
     TextStringBuilder result = new TextStringBuilder();
 
     Neo4jRealmSearchDAO.QueryInfo left = new Neo4jRealmSearchDAO.QueryInfo(
@@ -330,6 +344,10 @@ public class Neo4jRealmSearchDAOMutationTest {
   @Test
   @DisplayName("MT4: wrapQuery removes redundant id field")
   public void testMT4_WrapQuery_RemovesIdField() {
+    /*
+     * wrapQuery should not duplicate the 'id' field
+     * in the final projection.
+     */
     Map<String, Object> params = new HashMap<>();
 
     Set<String> fields = new HashSet<>();
@@ -352,6 +370,11 @@ public class Neo4jRealmSearchDAOMutationTest {
   @Test
   @DisplayName("MT5: parseOrderBy returns expected clause")
   public void testMT5_ParseOrderBy_ReturnsClause() {
+    /*
+     * Simple ORDER BY on a realm field,
+     * checking correct direction and format.
+     */
+
     when(realmUtils.getField("name")).thenReturn(
       Optional.of(mockRealmField("name"))
     );
@@ -376,6 +399,11 @@ public class Neo4jRealmSearchDAOMutationTest {
   @Test
   @DisplayName("MT6: Nested AND conditions collect all fields")
   public void testMT6_GetQuery_AndCollectsFields() {
+    /*
+     * AND condition: both sides must contribute
+     * fields and be combined in the query.
+     */
+
     AnyCond leftAnyCond = mock(AnyCond.class);
 
     when(leftAnyCond.getSchema()).thenReturn("name");
@@ -452,6 +480,11 @@ public class Neo4jRealmSearchDAOMutationTest {
   @Test
   @DisplayName("MT7: parseOrderBy accepts plain schema ordering")
   public void testMT7_ParseOrderBy_PlainSchema() {
+    /*
+     * ORDER BY using a plain schema when
+     * it's not a direct realm field.
+     */
+
     PlainSchema schema = mockSchema("city", AttrSchemaType.String, true);
 
     when(realmUtils.getField("city")).thenReturn(Optional.empty());
@@ -478,6 +511,11 @@ public class Neo4jRealmSearchDAOMutationTest {
   @Test
   @DisplayName("MT8: getQuery invokes custom condition hook")
   public void testMT8_GetQuery_CustomCondHookInvoked() {
+    /*
+     * Checks that the custom query hook
+     * is actually invoked.
+     */
+
     Neo4jRealmSearchDAO customDAO = new TestableNeo4jRealmSearchDAO(
       realmDAO,
       plainSchemaDAO,
@@ -522,6 +560,11 @@ public class Neo4jRealmSearchDAOMutationTest {
   @Test
   @DisplayName("MT9: wrapQuery adds realm fields and schema fields")
   public void testMT9_WrapQuery_AddsFieldsToWithClause() {
+    /*
+     * wrapQuery should include both realm fields
+     * and plain schema projections.
+     */
+
     Map<String, Object> params = new HashMap<>();
 
     Set<String> fields = new HashSet<>();
@@ -557,6 +600,11 @@ public class Neo4jRealmSearchDAOMutationTest {
   @Test
   @DisplayName("MT10: AttrCond query generation is not empty")
   public void testMT10_AttrCondGeneratedQueryNotEmpty() {
+    /*
+     * Ensures AttrCond produces a non-empty
+     * query with a WHERE clause.
+     */
+
     AttrCond cond = mockAttrCond(AttrCond.Type.EQ, "city", "Rome");
 
     Neo4jRealmSearchDAO.QueryInfo queryInfo = searchDAO.getQuery(
@@ -579,6 +627,11 @@ public class Neo4jRealmSearchDAOMutationTest {
   @DisplayName("MT11: doSearch uses wrapQuery generated filters")
   @SuppressWarnings("unchecked")
   public void testMT11_DoSearch_UsesWrapQuery() {
+    /*
+     * doSearch should use the wrapped query
+     * (e.g. path filtering is applied).
+     */
+
     SearchCond cond = mock(SearchCond.class);
 
     when(cond.getType()).thenReturn(SearchCond.Type.LEAF);
