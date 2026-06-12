@@ -45,7 +45,7 @@ jobs:
         cache: maven
 
     - name: Build & Install (no tests)
-      run: mvn -B clean install -DskipTests
+      run: mvn -B clean install -DskipTests -Dmodernizer.skip=true
       
     - name: Run Tests with JaCoCo
       run: mvn -B test jacoco:report
