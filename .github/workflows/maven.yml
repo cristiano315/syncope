@@ -61,8 +61,11 @@ jobs:
 
 
     # PIT Mutation Testing
-    - name: Run PIT
-      run: mvn -pl core -am org.pitest:pitest-maven:mutationCoverage
+    - name: Run PIT 1
+      run: mvn -pl core/provisioning-java -am org.pitest:pitest-maven:mutationCoverage
+    - name: Run PIT 2
+      run: mvn -pl core/persistence-neo4j -am org.pitest:pitest-maven:mutationCoverage
+     
 
 
 
