@@ -1,0 +1,2813 @@
+Zero Shot:
+as a professional software tester who writes Java test methods, generate a complit junit 5 test file Neo4jRealmSearchDAOZeroShotTest/.java to comprehensively test all methods in the following class named Neo4jRealmSearchDAO. Your output file must start with //###Test START## and finish with //###Test END##. Here is the source code:
+/*
+ * Licensed to the Apache Software Foundation (ASF) under one
+ * or more contributor license agreements.  See the NOTICE file
+ * distributed with this work for additional information
+ * regarding copyright ownership.  The ASF licenses this file
+ * to you under the Apache License, Version 2.0 (the
+ * "License"); you may not use this file except in compliance
+ * with the License.  You may obtain a copy of the License at
+ *
+ *   http://www.apache.org/licenses/LICENSE-2.0
+ *
+ * Unless required by applicable law or agreed to in writing,
+ * software distributed under the License is distributed on an
+ * "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY
+ * KIND, either express or implied.  See the License for the
+ * specific language governing permissions and limitations
+ * under the License.
+ */
+package org.apache.syncope.core.persistence.neo4j.dao;
+
+import java.time.format.DateTimeFormatter;
+import java.util.ArrayList;
+import java.util.Collection;
+import java.util.HashMap;
+import java.util.HashSet;
+import java.util.List;
+import java.util.Map;
+import java.util.Optional;
+import java.util.Set;
+import java.util.concurrent.atomic.AtomicInteger;
+import java.util.stream.Collectors;
+import java.util.stream.Stream;
+import org.apache.commons.lang3.StringUtils;
+import org.apache.commons.lang3.Strings;
+import org.apache.commons.text.TextStringBuilder;
+import org.apache.syncope.common.lib.SyncopeClientException;
+import org.apache.syncope.common.lib.SyncopeConstants;
+import org.apache.syncope.common.lib.types.AttrSchemaType;
+import org.apache.syncope.common.lib.types.ClientExceptionType;
+import org.apache.syncope.core.persistence.api.attrvalue.PlainAttrValidationManager;
+import org.apache.syncope.core.persistence.api.dao.GroupDAO;
+import org.apache.syncope.core.persistence.api.dao.MalformedPathException;
+import org.apache.syncope.core.persistence.api.dao.PlainSchemaDAO;
+import org.apache.syncope.core.persistence.api.dao.RealmDAO;
+import org.apache.syncope.core.persistence.api.dao.UserDAO;
+import org.apache.syncope.core.persistence.api.dao.search.AnyCond;
+import org.apache.syncope.core.persistence.api.dao.search.AttrCond;
+import org.apache.syncope.core.persistence.api.dao.search.AuxClassCond;
+import org.apache.syncope.core.persistence.api.dao.search.ResourceCond;
+import org.apache.syncope.core.persistence.api.dao.search.SearchCond;
+import org.apache.syncope.core.persistence.api.entity.EntityFactory;
+import org.apache.syncope.core.persistence.api.entity.PlainAttrValue;
+import org.apache.syncope.core.persistence.api.entity.PlainSchema;
+import org.apache.syncope.core.persistence.api.entity.Realm;
+import org.apache.syncope.core.persistence.api.utils.RealmUtils;
+import org.apache.syncope.core.persistence.common.dao.AbstractRealmSearchDAO;
+import org.apache.syncope.core.persistence.neo4j.dao.repo.AnyRepoExt;
+import org.apache.syncope.core.persistence.neo4j.entity.Neo4jAnyTypeClass;
+import org.apache.syncope.core.persistence.neo4j.entity.Neo4jExternalResource;
+import org.apache.syncope.core.persistence.neo4j.entity.Neo4jRealm;
+import org.springframework.data.domain.Pageable;
+import org.springframework.data.domain.Sort;
+import org.springframework.data.domain.Sort.Order;
+import org.springframework.data.neo4j.core.Neo4jClient;
+import org.springframework.data.neo4j.core.Neo4jTemplate;
+import org.springframework.data.util.Streamable;
+import org.springframework.transaction.annotation.Transactional;
+
+public class Neo4jRealmSearchDAO extends AbstractRealmSearchDAO {
+
+    protected record AnyCondQuery(String query, String field) {
+
+    }
+
+    protected record AttrCondQuery(String query, PlainSchema schema) {
+
+    }
+
+    protected record QueryInfo(
+            TextStringBuilder query,
+            Set<String> fields,
+            Set<PlainSchema> plainSchemas) {
+
+    }
+
+    protected static String setParameter(final Map<String, Object> parameters, final Object parameter) {
+        String name = "param" + parameters.size();
+        parameters.put(name, parameter);
+        return name;
+    }
+
+    protected static void appendPlainAttrCond(
+            final TextStringBuilder query, final PlainSchema schema, final String cond) {
+
+        if (schema.isUniqueConstraint()) {
+            query.append(schema.getKey()).append('.').append(key(schema.getType())).append(cond);
+        } else {
+            query.append("any(k IN ").append(schema.getKey()).
+                    append(" WHERE k").append('.').append(key(schema.getType())).append(cond).
+                    append(")");
+        }
+    }
+
+    protected static String escapeIfString(final String value, final boolean isStr) {
+        return isStr
+                ? new StringBuilder().append('"').append(value).append('"').toString()
+                : value;
+    }
+
+    protected static void queryOp(
+            final TextStringBuilder query,
+            final String op,
+            final QueryInfo leftInfo,
+            final QueryInfo rightInfo) {
+
+        query.append("WHERE EXISTS { ").
+                append(Strings.CS.prependIfMissing(leftInfo.query().toString(), "MATCH (n) ")).
+                append(" } ").
+                append(op).append(" EXISTS { ").
+                append(Strings.CS.prependIfMissing(rightInfo.query().toString(), "MATCH (n) ")).
+                append(" }");
+    }
+
+    protected final RealmDAO realmDAO;
+
+    protected final RealmUtils realmUtils;
+
+    protected final Neo4jTemplate neo4jTemplate;
+
+    protected final Neo4jClient neo4jClient;
+
+    public Neo4jRealmSearchDAO(
+            final RealmDAO realmDAO,
+            final PlainSchemaDAO plainSchemaDAO,
+            final UserDAO userDAO,
+            final GroupDAO groupDAO,
+            final EntityFactory entityFactory,
+            final PlainAttrValidationManager validator,
+            final RealmUtils realmUtils,
+            final Neo4jTemplate neo4jTemplate,
+            final Neo4jClient neo4jClient) {
+
+        super(plainSchemaDAO, userDAO, groupDAO, entityFactory, validator);
+        this.realmDAO = realmDAO;
+        this.realmUtils = realmUtils;
+        this.neo4jTemplate = neo4jTemplate;
+        this.neo4jClient = neo4jClient;
+    }
+
+    @Transactional(readOnly = true)
+    @Override
+    public Optional<Realm> findByFullPath(final String fullPath) {
+        if (StringUtils.isBlank(fullPath)
+                || (!SyncopeConstants.ROOT_REALM.equals(fullPath)
+                && !RealmDAO.PATH_PATTERN.matcher(fullPath).matches())) {
+
+            throw new MalformedPathException(fullPath);
+        }
+
+        return neo4jClient.query(
+                "MATCH (n:" + Neo4jRealm.NODE + ") WHERE n.fullPath = $fullPath RETURN n.id").
+                bindAll(Map.of("fullPath", fullPath)).fetch().one().
+                flatMap(found -> realmDAO.findById(found.get("n.id").toString()).map(n -> (Realm) n));
+    }
+
+    protected List<Realm> toList(
+            final Collection<Map<String, Object>> result,
+            final String property) {
+
+        return result.stream().
+                map(found -> realmDAO.findById(found.get(property).toString())).
+                flatMap(Optional::stream).map(n -> (Realm) n).toList();
+    }
+
+    @Override
+    public List<Realm> findByName(final String name) {
+        return toList(neo4jClient.query(
+                "MATCH (n:" + Neo4jRealm.NODE + ") WHERE n.name = $name RETURN n.id").
+                bindAll(Map.of("name", name)).fetch().all(), "n.id");
+    }
+
+    @Override
+    public List<Realm> findChildren(final Realm realm) {
+        return toList(neo4jClient.query(
+                "MATCH (n:" + Neo4jRealm.NODE + " {id: $id})<-[r:" + Neo4jRealm.PARENT_REL + "]-(c) RETURN c.id").
+                bindAll(Map.of("id", realm.getKey())).fetch().all(), "c.id");
+    }
+
+    @Override
+    public List<Realm> findDescendants(final String base, final String prefix) {
+        Map<String, Object> parameters = new HashMap<>();
+
+        StringBuilder query = new StringBuilder("MATCH (n:").append(Neo4jRealm.NODE).append(") ").
+                append("WHERE (").append("n.fullPath = $base OR n.fullPath =~ $like").append(')');
+        parameters.put("base", base);
+        parameters.put("like", SyncopeConstants.ROOT_REALM.equals(base) ? "/.*" : base + "/.*");
+
+        if (prefix != null) {
+            query.append(" AND (n.fullPath = $prefix OR n.fullPath =~ $likePrefix)");
+            parameters.put("prefix", prefix);
+            parameters.put("likePrefix", SyncopeConstants.ROOT_REALM.equals(prefix) ? "/.*" : prefix + "/.*");
+        }
+
+        query.append(" RETURN n.id ORDER BY n.fullPath");
+
+        return toList(neo4jClient.query(
+                query.toString()).bindAll(parameters).fetch().all(), "n.id");
+    }
+
+    protected QueryInfo getQuery(final SearchCond cond, final Map<String, Object> parameters) {
+        boolean not = cond.getType() == SearchCond.Type.NOT_LEAF;
+
+        TextStringBuilder query = new TextStringBuilder();
+        Set<String> involvedFields = new HashSet<>();
+        Set<PlainSchema> involvedPlainSchemas = new HashSet<>();
+
+        switch (cond.getType()) {
+            case LEAF, NOT_LEAF -> {
+                cond.asLeaf(AuxClassCond.class).
+                        ifPresent(leaf -> query.append(getQuery(leaf, not, parameters)));
+
+                cond.asLeaf(ResourceCond.class).
+                        ifPresent(leaf -> query.append(getQuery(leaf, not, parameters)));
+
+                cond.asLeaf(AnyCond.class).ifPresentOrElse(
+                        anyCond -> {
+                            AnyCondQuery anyCondQuery = getQuery(anyCond, not, parameters);
+                            query.append(anyCondQuery.query());
+                            Optional.ofNullable(anyCondQuery.field()).ifPresent(involvedFields::add);
+                        },
+                        () -> cond.asLeaf(AttrCond.class).ifPresent(leaf -> {
+                            AttrCondQuery attrCondQuery = getQuery(leaf, not, parameters);
+                            query.append(attrCondQuery.query());
+                            involvedPlainSchemas.add(attrCondQuery.schema());
+                        }));
+
+                // allow for additional search conditions
+                getQueryForCustomConds(cond, parameters, not, query);
+            }
+            case AND -> {
+                QueryInfo leftAndInfo = getQuery(cond.getLeft(), parameters);
+                involvedFields.addAll(leftAndInfo.fields());
+                involvedPlainSchemas.addAll(leftAndInfo.plainSchemas());
+
+                QueryInfo rigthAndInfo = getQuery(cond.getRight(), parameters);
+                involvedFields.addAll(rigthAndInfo.fields());
+                involvedPlainSchemas.addAll(rigthAndInfo.plainSchemas());
+
+                queryOp(query, "AND", leftAndInfo, rigthAndInfo);
+            }
+
+            case OR -> {
+                QueryInfo leftOrInfo = getQuery(cond.getLeft(), parameters);
+                involvedFields.addAll(leftOrInfo.fields());
+                involvedPlainSchemas.addAll(leftOrInfo.plainSchemas());
+
+                QueryInfo rigthOrInfo = getQuery(cond.getRight(), parameters);
+                involvedFields.addAll(rigthOrInfo.fields());
+                involvedPlainSchemas.addAll(rigthOrInfo.plainSchemas());
+
+                queryOp(query, "OR", leftOrInfo, rigthOrInfo);
+            }
+
+            default -> {
+            }
+        }
+
+        return new QueryInfo(query, involvedFields, involvedPlainSchemas);
+    }
+
+    protected void wrapQuery(
+            final Set<String> bases,
+            final QueryInfo queryInfo,
+            final Streamable<Order> orderBy,
+            final Map<String, Object> parameters) {
+
+        TextStringBuilder match = new TextStringBuilder("MATCH (n:").append(Neo4jRealm.NODE).append(") ").
+                append("WITH n.id AS id");
+
+        // take fields into account
+        queryInfo.fields().remove("id");
+        Stream.concat(
+                queryInfo.fields().stream(),
+                orderBy.stream().filter(clause -> !"id".equals(clause.getProperty())
+                && realmUtils.getField(clause.getProperty()).isPresent()).map(Order::getProperty)).
+                distinct().forEach(field -> match.append(", n.").append(field).append(" AS ").append(field));
+
+        // take plain schemas into account
+        Stream.concat(
+                queryInfo.plainSchemas().stream(),
+                orderBy.stream().map(clause -> plainSchemaDAO.findById(clause.getProperty())).
+                        flatMap(Optional::stream)).distinct().forEach(schema -> {
+
+            match.append(", apoc.convert.getJsonProperty(n, 'plainAttrs.").append(schema.getKey());
+            if (schema.isUniqueConstraint()) {
+                match.append("', '$.uniqueValue')");
+            } else {
+                match.append("', '$.values')");
+            }
+            match.append(" AS ").append(schema.getKey());
+        });
+
+        TextStringBuilder query = queryInfo.query();
+
+        // take bases into account
+        AtomicInteger index = new AtomicInteger(0);
+        String basesClause = bases.stream().map(base -> {
+            int idx = index.incrementAndGet();
+            parameters.put("base" + idx, base);
+            parameters.put("like" + idx, SyncopeConstants.ROOT_REALM.equals(base) ? "/.*" : base + "/.*");
+            return "n.fullPath = $base" + idx + " OR n.fullPath =~ $like" + idx;
+        }).collect(Collectors.joining(" OR "));
+        if (query.startsWith("MATCH (n)")) {
+            query.replaceFirst("MATCH (n)", match + " WHERE (EXISTS { MATCH (n)");
+            query.append("} ");
+        } else {
+            query.replaceFirst("WHERE EXISTS", "WHERE (EXISTS");
+            query.insert(0, match.append(' '));
+        }
+        query.append(") AND EXISTS { ").append("(n) WHERE (").append(basesClause).append(")").append(" } ");
+    }
+
+    protected AttrCondQuery getQuery(
+            final AttrCond cond,
+            final boolean not,
+            final Map<String, Object> parameters) {
+
+        CheckResult<AttrCond> checked = check(cond);
+
+        TextStringBuilder query = new TextStringBuilder("MATCH (n) ");
+        switch (cond.getType()) {
+            case ISNOTNULL ->
+                query.append("WHERE n.`plainAttrs.").append(checked.schema().getKey()).append("` IS NOT NULL");
+
+            case ISNULL ->
+                query.append("WHERE n.`plainAttrs.").append(checked.schema().getKey()).append("` IS NULL");
+
+            default ->
+                fillAttrQuery(query, checked.value(), checked.schema(), cond, not, parameters);
+        }
+
+        return new AttrCondQuery(query.toString(), checked.schema());
+    }
+
+    protected String getQuery(
+            final AuxClassCond cond,
+            final boolean not,
+            final Map<String, Object> parameters) {
+
+        return "MATCH (n) "
+                + "WHERE " + (not ? "NOT " : "") + "(n)-[]-"
+                + "(:" + Neo4jAnyTypeClass.NODE + " {id: $" + setParameter(parameters, cond.getAuxClass()) + "}) ";
+    }
+
+    protected String getQuery(
+            final ResourceCond cond,
+            final boolean not,
+            final Map<String, Object> parameters) {
+
+        return "MATCH (n) "
+                + "WHERE " + (not ? "NOT " : "") + "(n)-[]-"
+                + "(:" + Neo4jExternalResource.NODE + " {id: $" + setParameter(parameters, cond.getResource()) + "}) ";
+    }
+
+    protected void getQueryForCustomConds(
+            final SearchCond cond,
+            final Map<String, Object> parameters,
+            final boolean not,
+            final TextStringBuilder query) {
+
+        // do nothing by default, leave it open for subclasses
+    }
+
+    protected void fillAttrQuery(
+            final TextStringBuilder query,
+            final PlainAttrValue attrValue,
+            final PlainSchema schema,
+            final AttrCond cond,
+            final boolean not,
+            final Map<String, Object> parameters) {
+
+        if (not && cond.getType() == AttrCond.Type.ISNULL) {
+            cond.setType(AttrCond.Type.ISNOTNULL);
+            fillAttrQuery(query, attrValue, schema, cond, true, parameters);
+            return;
+        }
+        if (not) {
+            if (schema.isUniqueConstraint()) {
+                fillAttrQuery(query, attrValue, schema, cond, false, parameters);
+                query.replaceFirst("WHERE", "WHERE NOT(");
+                query.append(')');
+            } else {
+                fillAttrQuery(query, attrValue, schema, cond, false, parameters);
+                query.replaceAll("any(", schema.getKey() + " IS NULL OR none(");
+            }
+            return;
+        }
+
+        String value = Optional.ofNullable(attrValue.getDateValue()).
+                map(DateTimeFormatter.ISO_OFFSET_DATE_TIME::format).
+                orElseGet(cond::getExpression);
+
+        boolean isStr = true;
+        boolean lower = false;
+        if (schema.getType().isStringClass()) {
+            lower = (cond.getType() == AttrCond.Type.IEQ || cond.getType() == AttrCond.Type.ILIKE);
+        } else if (schema.getType() != AttrSchemaType.Date) {
+            lower = false;
+            try {
+                switch (schema.getType()) {
+                    case Long ->
+                        Long.valueOf(value);
+
+                    case Double ->
+                        Double.valueOf(value);
+
+                    case Boolean -> {
+                        if (!("true".equalsIgnoreCase(value) || "false".equalsIgnoreCase(value))) {
+                            throw new IllegalArgumentException();
+                        }
+                    }
+
+                    default -> {
+                    }
+                }
+
+                isStr = false;
+            } catch (Exception nfe) {
+                // ignore
+            }
+        }
+
+        query.append("WHERE ");
+
+        switch (cond.getType()) {
+            case ISNULL -> {
+            }
+
+            case ISNOTNULL ->
+                query.append(schema.getKey()).append(" IS NOT NULL");
+
+            case ILIKE, LIKE -> {
+                if (schema.getType().isStringClass()) {
+                    appendPlainAttrCond(
+                            query,
+                            schema,
+                            " =~ \"" + (lower ? "(?i)" : "")
+                            + AnyRepoExt.escapeForLikeRegex(value).replace("%", ".*") + '"');
+                } else {
+                    query.append(ALWAYS_FALSE_CLAUSE);
+                    LOG.error("LIKE is only compatible with string or enum schemas");
+                }
+            }
+
+            case IEQ, EQ -> {
+                if (StringUtils.containsAny(value, AnyRepoExt.REGEX_CHARS) || lower) {
+                    appendPlainAttrCond(
+                            query,
+                            schema,
+                            " =~ \"^" + (lower ? "(?i)" : "")
+                            + AnyRepoExt.escapeForLikeRegex(value).replace("%", ".*") + "$\"");
+                } else {
+                    appendPlainAttrCond(
+                            query,
+                            schema,
+                            " = " + escapeIfString(value, isStr));
+                }
+            }
+
+            case GE ->
+                appendPlainAttrCond(
+                        query,
+                        schema,
+                        " >= " + escapeIfString(value, isStr));
+
+            case GT ->
+                appendPlainAttrCond(
+                        query,
+                        schema,
+                        " > " + escapeIfString(value, isStr));
+
+            case LE ->
+                appendPlainAttrCond(
+                        query,
+                        schema,
+                        " <= " + escapeIfString(value, isStr));
+
+            case LT ->
+                appendPlainAttrCond(
+                        query,
+                        schema,
+                        " < " + escapeIfString(value, isStr));
+
+            default -> {
+            }
+        }
+        // shouldn't occour: processed before
+    }
+
+    protected void fillAttrQuery(
+            final TextStringBuilder query,
+            final PlainAttrValue attrValue,
+            final PlainSchema schema,
+            final AnyCond cond,
+            final boolean not,
+            final Map<String, Object> parameters) {
+
+        if (not && cond.getType() == AttrCond.Type.ISNULL) {
+            cond.setType(AttrCond.Type.ISNOTNULL);
+            fillAttrQuery(query, attrValue, schema, cond, true, parameters);
+            return;
+        }
+        if (not) {
+            query.append("NOT (");
+            fillAttrQuery(query, attrValue, schema, cond, false, parameters);
+            query.append(')');
+            return;
+        }
+        if (not && cond.getType() == AttrCond.Type.ISNULL) {
+            cond.setType(AttrCond.Type.ISNOTNULL);
+            fillAttrQuery(query, attrValue, schema, cond, true, parameters);
+            return;
+        }
+
+        boolean lower = schema.getType().isStringClass()
+                && (cond.getType() == AttrCond.Type.IEQ || cond.getType() == AttrCond.Type.ILIKE);
+
+        String property = "n." + cond.getSchema();
+        if (lower) {
+            property = "toLower (" + property + ')';
+        }
+
+        switch (cond.getType()) {
+
+            case ISNULL ->
+                query.append(property).append(" IS NULL");
+
+            case ISNOTNULL ->
+                query.append(property).append(" IS NOT NULL");
+
+            case ILIKE, LIKE -> {
+                if (schema.getType().isStringClass()) {
+                    query.append(property).append(" =~ ");
+                    if (lower) {
+                        query.append("toLower($").
+                                append(setParameter(parameters, cond.getExpression().replace("%", ".*"))).
+                                append(')');
+                    } else {
+                        query.append('$').append(setParameter(parameters, cond.getExpression().replace("%", ".*")));
+                    }
+                } else {
+                    query.append(' ').append(ALWAYS_FALSE_CLAUSE);
+                    LOG.error("LIKE is only compatible with string or enum schemas");
+                }
+            }
+
+            case IEQ, EQ -> {
+                query.append(property).append('=');
+
+                if (lower) {
+                    query.append("toLower($").append(setParameter(parameters, attrValue.getValue())).append(')');
+                } else {
+                    query.append('$').append(setParameter(parameters, attrValue.getValue()));
+                }
+            }
+
+            case GE -> {
+                query.append(property);
+                if (not) {
+                    query.append('<');
+                } else {
+                    query.append(">=");
+                }
+                query.append('$').append(setParameter(parameters, attrValue.getValue()));
+            }
+
+            case GT -> {
+                query.append(property);
+                if (not) {
+                    query.append("<=");
+                } else {
+                    query.append('>');
+                }
+                query.append('$').append(setParameter(parameters, attrValue.getValue()));
+            }
+
+            case LE -> {
+                query.append(property);
+                if (not) {
+                    query.append('>');
+                } else {
+                    query.append("<=");
+                }
+                query.append('$').append(setParameter(parameters, attrValue.getValue()));
+            }
+
+            case LT -> {
+                query.append(property);
+                if (not) {
+                    query.append(">=");
+                } else {
+                    query.append('<');
+                }
+                query.append('$').append(setParameter(parameters, attrValue.getValue()));
+            }
+
+            default -> {
+            }
+        }
+    }
+
+    protected AnyCondQuery getQuery(
+            final AnyCond cond,
+            final boolean not,
+            final Map<String, Object> parameters) {
+
+        CheckResult<AnyCond> checked = check(
+                cond,
+                realmUtils.getField(cond.getSchema()).
+                        orElseThrow(() -> new IllegalArgumentException("Invalid schema " + cond.getSchema())),
+                RELATIONSHIP_FIELDS);
+
+        TextStringBuilder query = new TextStringBuilder("MATCH (n) WHERE ");
+
+        fillAttrQuery(query, checked.value(), checked.schema(), checked.cond(), not, parameters);
+
+        return new AnyCondQuery(query.toString(), checked.cond().getSchema());
+    }
+
+    @Override
+    protected long doCount(final Set<String> bases, final SearchCond cond) {
+        Map<String, Object> parameters = new HashMap<>();
+
+        QueryInfo queryInfo = getQuery(cond, parameters);
+
+        wrapQuery(bases, queryInfo, Streamable.empty(), parameters);
+        TextStringBuilder query = queryInfo.query();
+
+        query.append("RETURN COUNT(id)");
+
+        LOG.debug("Query: {}, parameters: {}", query, parameters);
+
+        return neo4jTemplate.count(query.toString(), parameters);
+    }
+
+    protected List<String> parseOrderBy(final Streamable<Sort.Order> orderBy) {
+        List<String> clauses = new ArrayList<>();
+
+        Set<String> orderByUniquePlainSchemas = new HashSet<>();
+        Set<String> orderByNonUniquePlainSchemas = new HashSet<>();
+        orderBy.forEach(clause -> {
+            if (realmUtils.getField(clause.getProperty()).isPresent()) {
+                clauses.add(clause.getProperty() + " " + clause.getDirection().name());
+            } else {
+                plainSchemaDAO.findById(clause.getProperty()).ifPresent(schema -> {
+                    if (schema.isUniqueConstraint()) {
+                        orderByUniquePlainSchemas.add(schema.getKey());
+                    } else {
+                        orderByNonUniquePlainSchemas.add(schema.getKey());
+                    }
+                    if (orderByUniquePlainSchemas.size() > 1 || orderByNonUniquePlainSchemas.size() > 1) {
+                        SyncopeClientException invalidSearch =
+                                SyncopeClientException.build(ClientExceptionType.InvalidSearchParameters);
+                        invalidSearch.getElements().add("Order by more than one attribute is not allowed; "
+                                + "remove one from " + (orderByUniquePlainSchemas.size() > 1
+                                ? orderByUniquePlainSchemas : orderByNonUniquePlainSchemas));
+                        throw invalidSearch;
+                    }
+
+                    clauses.add(schema.getKey() + " " + clause.getDirection().name());
+                });
+            }
+        });
+
+        return clauses;
+    }
+
+    @Override
+    protected List<Realm> doSearch(final Set<String> bases, final SearchCond cond, final Pageable pageable) {
+        Map<String, Object> parameters = new HashMap<>();
+
+        QueryInfo queryInfo = getQuery(cond, parameters);
+
+        wrapQuery(bases, queryInfo, pageable.getSort(), parameters);
+        TextStringBuilder query = queryInfo.query();
+
+        List<String> orderBy = parseOrderBy(pageable.getSort());
+        String orderByStmt = String.join(", ", orderBy);
+
+        query.append("RETURN id ").
+                append("ORDER BY ").append(orderByStmt);
+
+        if (pageable.isPaged()) {
+            query.append(" SKIP ").append(pageable.getPageSize() * pageable.getPageNumber()).
+                    append(" LIMIT ").append(pageable.getPageSize());
+        }
+
+        LOG.debug("Query: {}, parameters: {}", query, parameters);
+
+        return toList(neo4jClient.query(
+                query.toString()).bindAll(parameters).fetch().all(), "id");
+    }
+}
+
+Few Shot:
+as a professional software tester who writes Java test methods, consider the following examples:/*
+ * Licensed to the Apache Software Foundation (ASF) under one
+ * or more contributor license agreements.  See the NOTICE file
+ * distributed with this work for additional information
+ * regarding copyright ownership.  The ASF licenses this file
+ * to you under the Apache License, Version 2.0 (the
+ * "License"); you may not use this file except in compliance
+ * with the License.  You may obtain a copy of the License at
+ *
+ *   http://www.apache.org/licenses/LICENSE-2.0
+ *
+ * Unless required by applicable law or agreed to in writing,
+ * software distributed under the License is distributed on an
+ * "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY
+ * KIND, either express or implied.  See the License for the
+ * specific language governing permissions and limitations
+ * under the License.
+ */
+package org.apache.syncope.core.persistence.neo4j.dao;
+
+import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.junit.jupiter.api.Assertions.assertThrows;
+import static org.junit.jupiter.api.Assertions.assertTrue;
+import static org.mockito.ArgumentMatchers.anyMap;
+import static org.mockito.ArgumentMatchers.anyString;
+import static org.mockito.ArgumentMatchers.argThat;
+import static org.mockito.Mockito.RETURNS_DEEP_STUBS;
+import static org.mockito.Mockito.doReturn;
+import static org.mockito.Mockito.mock;
+import static org.mockito.Mockito.when;
+
+import java.lang.reflect.Field;
+import java.time.OffsetDateTime;
+import java.util.HashMap;
+import java.util.HashSet;
+import java.util.List;
+import java.util.Map;
+import java.util.Optional;
+import java.util.Set;
+
+import org.apache.commons.text.TextStringBuilder;
+import org.apache.syncope.common.lib.SyncopeClientException;
+import org.apache.syncope.common.lib.types.AttrSchemaType;
+import org.apache.syncope.core.persistence.api.dao.MalformedPathException;
+import org.apache.syncope.core.persistence.api.dao.PlainSchemaDAO;
+import org.apache.syncope.core.persistence.api.dao.RealmDAO;
+import org.apache.syncope.core.persistence.api.dao.search.AnyCond;
+import org.apache.syncope.core.persistence.api.dao.search.AttrCond;
+import org.apache.syncope.core.persistence.api.dao.search.AuxClassCond;
+import org.apache.syncope.core.persistence.api.dao.search.ResourceCond;
+import org.apache.syncope.core.persistence.api.dao.search.SearchCond;
+import org.apache.syncope.core.persistence.api.entity.PlainAttrValue;
+import org.apache.syncope.core.persistence.api.entity.PlainSchema;
+import org.apache.syncope.core.persistence.api.entity.Realm;
+import org.apache.syncope.core.persistence.api.utils.RealmUtils;
+import org.junit.jupiter.api.BeforeEach;
+import org.junit.jupiter.api.DisplayName;
+import org.junit.jupiter.api.Test;
+import org.springframework.data.domain.PageRequest;
+import org.springframework.data.domain.Sort;
+import org.springframework.data.neo4j.core.Neo4jClient;
+import org.springframework.data.neo4j.core.Neo4jTemplate;
+import org.springframework.data.util.Streamable;
+
+public class Neo4jRealmSearchDAOTest {
+
+    private Neo4jRealmSearchDAO searchDAO;
+
+    private Map<String, Object> parameters;
+
+    private RealmDAO realmDAO;
+
+    private PlainSchemaDAO plainSchemaDAO;
+
+    private RealmUtils realmUtils;
+
+    private Neo4jClient neo4jClient;
+
+    private Neo4jTemplate neo4jTemplate;
+
+    /*
+     * This small dummy class is only used to obtain a real Field instance.
+     * RealmUtils.getField() returns Optional<Field>, therefore a simple String
+     * would not be enough for the pagination test.
+     */
+    private static class DummyRealmFields {
+
+        public String name;
+    }
+
+    @BeforeEach
+    public void setUp() {
+        realmDAO = mock(RealmDAO.class);
+        plainSchemaDAO = mock(PlainSchemaDAO.class);
+        realmUtils = mock(RealmUtils.class);
+        neo4jClient = mock(Neo4jClient.class, RETURNS_DEEP_STUBS);
+        neo4jTemplate = mock(Neo4jTemplate.class);
+
+        /*
+         * The DAO is created once before each test with mocked dependencies.
+         * This keeps the tests focused on the behavior of Neo4jRealmSearchDAO
+         * without requiring a real Neo4j instance or real persistence objects.
+         */
+        searchDAO = new Neo4jRealmSearchDAO(
+                realmDAO,
+                plainSchemaDAO,
+                null,
+                null,
+                null,
+                null,
+                realmUtils,
+                neo4jTemplate,
+                neo4jClient);
+
+        parameters = new HashMap<>();
+    }
+
+    /*
+     * Helper methods used to keep the single test cases readable.
+     * They create the minimum mocked objects needed by fillAttrQuery()
+     * and by the query-building methods.
+     */
+    private PlainSchema mockSchema(final String key, final AttrSchemaType type, final boolean isUnique) {
+        PlainSchema schema = mock(PlainSchema.class);
+        when(schema.getKey()).thenReturn(key);
+        when(schema.getType()).thenReturn(type);
+        when(schema.isUniqueConstraint()).thenReturn(isUnique);
+        return schema;
+    }
+
+    private PlainAttrValue mockValue(final String stringValue, final OffsetDateTime dateValue) {
+        PlainAttrValue attrValue = mock(PlainAttrValue.class);
+        when(attrValue.getValue()).thenReturn(stringValue);
+        when(attrValue.getDateValue()).thenReturn(dateValue);
+        return attrValue;
+    }
+
+    private AnyCond mockCond(final AnyCond.Type type, final String schemaName, final String expression) {
+        AnyCond cond = mock(AnyCond.class);
+        when(cond.getType()).thenReturn(type);
+        when(cond.getSchema()).thenReturn(schemaName);
+        when(cond.getExpression()).thenReturn(expression);
+        return cond;
+    }
+
+    private Field mockRealmField() {
+        try {
+            return DummyRealmFields.class.getDeclaredField("name");
+        } catch (NoSuchFieldException e) {
+            throw new IllegalStateException(e);
+        }
+    }
+
+    private SearchCond mockLeafAttrCond(final AttrCond attrCond) {
+        SearchCond searchCond = mock(SearchCond.class);
+
+        when(searchCond.getType()).thenReturn(SearchCond.Type.LEAF);
+        when(searchCond.asLeaf(AuxClassCond.class)).thenReturn(Optional.empty());
+        when(searchCond.asLeaf(ResourceCond.class)).thenReturn(Optional.empty());
+        when(searchCond.asLeaf(AnyCond.class)).thenReturn(Optional.empty());
+        when(searchCond.asLeaf(AttrCond.class)).thenReturn(Optional.of(attrCond));
+
+        return searchCond;
+    }
+
+    private SearchCond mockLeafAuxClassCond(final String auxClass) {
+        AuxClassCond auxClassCond = mock(AuxClassCond.class);
+        when(auxClassCond.getAuxClass()).thenReturn(auxClass);
+
+        SearchCond searchCond = mock(SearchCond.class);
+
+        when(searchCond.getType()).thenReturn(SearchCond.Type.LEAF);
+        when(searchCond.asLeaf(AuxClassCond.class)).thenReturn(Optional.of(auxClassCond));
+        when(searchCond.asLeaf(ResourceCond.class)).thenReturn(Optional.empty());
+        when(searchCond.asLeaf(AnyCond.class)).thenReturn(Optional.empty());
+        when(searchCond.asLeaf(AttrCond.class)).thenReturn(Optional.empty());
+
+        return searchCond;
+    }
+
+    private SearchCond mockLeafResourceCond(final String resource) {
+        ResourceCond resourceCond = mock(ResourceCond.class);
+        when(resourceCond.getResource()).thenReturn(resource);
+
+        SearchCond searchCond = mock(SearchCond.class);
+
+        when(searchCond.getType()).thenReturn(SearchCond.Type.LEAF);
+        when(searchCond.asLeaf(AuxClassCond.class)).thenReturn(Optional.empty());
+        when(searchCond.asLeaf(ResourceCond.class)).thenReturn(Optional.of(resourceCond));
+        when(searchCond.asLeaf(AnyCond.class)).thenReturn(Optional.empty());
+        when(searchCond.asLeaf(AttrCond.class)).thenReturn(Optional.empty());
+
+        return searchCond;
+    }
+
+    private SearchCond mockAndCond(final SearchCond left, final SearchCond right) {
+        SearchCond searchCond = mock(SearchCond.class);
+
+        when(searchCond.getType()).thenReturn(SearchCond.Type.AND);
+        when(searchCond.getLeft()).thenReturn(left);
+        when(searchCond.getRight()).thenReturn(right);
+
+        return searchCond;
+    }
+
+    private SearchCond mockOrCond(final SearchCond left, final SearchCond right) {
+        SearchCond searchCond = mock(SearchCond.class);
+
+        when(searchCond.getType()).thenReturn(SearchCond.Type.OR);
+        when(searchCond.getLeft()).thenReturn(left);
+        when(searchCond.getRight()).thenReturn(right);
+
+        return searchCond;
+    }
+
+    /*
+     * TC1-TC9 focus on fillAttrQuery().
+     * This method is the most variable part of the class because its output
+     * depends on the operator, the schema type, the uniqueness constraint,
+     * the input value and the negation flag.
+     */
+
+    @Test
+    @DisplayName("TC1: Simple Equality (EQ), String, Unique Value, Not=False")
+    public void testTC1_EQ_String_Unique() {
+        TextStringBuilder query = new TextStringBuilder();
+        PlainSchema schema = mockSchema("city", AttrSchemaType.String, true);
+        AnyCond cond = mockCond(AnyCond.Type.EQ, "city", "Rome");
+        PlainAttrValue value = mockValue("Rome", null);
+
+        searchDAO.fillAttrQuery(query, value, schema, cond, false, parameters);
+
+        /*
+         * This is the nominal case: equality on a unique string field.
+         * The expected Cypher condition is a direct property comparison.
+         */
+        assertTrue(query.toString().contains("n.city=$param0"),
+                "TC1 failed: Basic EQ translation didn't work. Actual query: " + query);
+        assertEquals("Rome", parameters.get("param0"),
+                "TC1 failed: Parameter map does not contain the correct value.");
+    }
+
+    @Test
+    @DisplayName("TC2: Case-Insensitive Equality (IEQ), String, Unique Value, Not=False")
+    public void testTC2_EQ_WithRegex_String_Unique() {
+        TextStringBuilder query = new TextStringBuilder();
+        PlainSchema schema = mockSchema("city", AttrSchemaType.String, true);
+        AnyCond cond = mockCond(AnyCond.Type.IEQ, "city", "Rome");
+        PlainAttrValue value = mockValue("Rome", null);
+
+        searchDAO.fillAttrQuery(query, value, schema, cond, false, parameters);
+
+        /*
+         * IEQ belongs to the equality category, but it also requires
+         * case-insensitive comparison. For this reason both sides of the
+         * comparison must be converted with toLower().
+         */
+        assertTrue(query.toString().contains("toLower (n.city)=toLower($param0)"),
+                "TC2 failed: System didn't apply case-insensitive logic. Actual query: " + query);
+        assertEquals("Rome", parameters.get("param0"));
+    }
+
+    @Test
+    @DisplayName("TC3: Greater Than (GT), Long, Multivalued, Not=False")
+    public void testTC3_GT_Long_Multivalued() {
+        TextStringBuilder query = new TextStringBuilder();
+        PlainSchema schema = mockSchema("age", AttrSchemaType.Long, false);
+        AnyCond cond = mockCond(AnyCond.Type.GT, "age", "150");
+        PlainAttrValue value = mockValue("150", null);
+
+        searchDAO.fillAttrQuery(query, value, schema, cond, false, parameters);
+
+        /*
+         * This test covers a relational operator on a numeric schema.
+         * The value must be handled as a parameter and the operator must be
+         * translated into the corresponding Cypher comparison.
+         */
+        assertTrue(query.toString().contains("n.age>$param0"),
+                "TC3 failed: Greater-than operator translation is broken. Actual query: " + query);
+        assertEquals("150", parameters.get("param0"));
+    }
+
+    @Test
+    @DisplayName("TC4: Null Check (ISNULL), Multivalued, Not=True")
+    public void testTC4_ISNULL_Multivalued_NotTrue() {
+        TextStringBuilder query = new TextStringBuilder();
+        PlainSchema schema = mockSchema("city", AttrSchemaType.String, false);
+        AnyCond cond = mockCond(AnyCond.Type.ISNULL, "city", null);
+
+        /*
+         * The method changes ISNULL into ISNOTNULL during the recursive
+         * handling of negation. The mock is configured to reproduce this
+         * sequence of calls.
+         */
+        when(cond.getType()).thenReturn(
+                AnyCond.Type.ISNULL,
+                AnyCond.Type.ISNOTNULL,
+                AnyCond.Type.ISNOTNULL);
+
+        PlainAttrValue value = mockValue(null, null);
+
+        searchDAO.fillAttrQuery(query, value, schema, cond, true, parameters);
+
+        /*
+         * This checks the behavior of the negation category for null checks.
+         */
+        assertTrue(query.toString().contains("NOT (n.city IS NOT NULL)"),
+                "TC4 failed: Recursive inversion of NOT on ISNULL is broken. Actual query: " + query);
+    }
+
+    @Test
+    @DisplayName("TC5: Less Than/Equal (LE), Date, Unique Value, Not=False")
+    public void testTC5_LE_Date_Unique() {
+        TextStringBuilder query = new TextStringBuilder();
+        PlainSchema schema = mockSchema("expirationDate", AttrSchemaType.Date, true);
+        AnyCond cond = mockCond(AnyCond.Type.LE, "expirationDate", null);
+
+        OffsetDateTime mockDate = OffsetDateTime.now();
+        PlainAttrValue value = mockValue(null, mockDate);
+
+        searchDAO.fillAttrQuery(query, value, schema, cond, false, parameters);
+
+        /*
+         * Date values follow a specific path because the value comes from
+         * getDateValue() and is formatted before being inserted into the query.
+         */
+        assertTrue(query.toString().contains("n.expirationDate<=") && query.toString().contains("param"),
+                "TC5 failed: ISO date formatting didn't work as expected. Actual query: " + query);
+    }
+
+    @Test
+    @DisplayName("TC6: Equality (EQ), Long, Invalid Value")
+    public void testTC6_EQ_Long_InvalidParsingFallback() {
+        TextStringBuilder query = new TextStringBuilder();
+        PlainSchema schema = mockSchema("age", AttrSchemaType.Long, true);
+        AnyCond cond = mockCond(AnyCond.Type.EQ, "age", "abc");
+        PlainAttrValue value = mockValue("abc", null);
+
+        searchDAO.fillAttrQuery(query, value, schema, cond, false, parameters);
+
+        /*
+         * This is a robustness test. The schema is numeric, but the value
+         * cannot be parsed as a Long. The method must not fail and must keep
+         * the raw value as query parameter.
+         */
+        assertTrue(query.toString().contains("n.age=$param0"),
+                "TC6 failed: Fallback property check is broken. Actual query: " + query);
+        assertEquals("abc", parameters.get("param0"));
+    }
+
+    @Test
+    @DisplayName("TC7: Equality (EQ), Boolean, Unique Value, Not=True")
+    public void testTC7_EQ_Boolean_Unique_NotTrue() {
+        TextStringBuilder query = new TextStringBuilder();
+        PlainSchema schema = mockSchema("isActive", AttrSchemaType.Boolean, true);
+        AnyCond cond = mockCond(AnyCond.Type.EQ, "isActive", "true");
+        PlainAttrValue value = mockValue("true", null);
+
+        searchDAO.fillAttrQuery(query, value, schema, cond, true, parameters);
+
+        /*
+         * This case verifies the negation of a normal equality condition
+         * on a unique boolean attribute.
+         */
+        assertTrue(query.toString().contains("NOT (n.isActive=$param0)"),
+                "TC7 failed: NOT clause wasn't applied correctly. Actual query: " + query);
+        assertEquals("true", parameters.get("param0"));
+    }
+
+    @Test
+    @DisplayName("TC8: Case-Insensitive Pattern Matching (ILIKE), String with Wildcard")
+    public void testTC8_ILIKE_String_WithWildcard() {
+        TextStringBuilder query = new TextStringBuilder();
+        PlainSchema schema = mockSchema("city", AttrSchemaType.String, true);
+        AnyCond cond = mockCond(AnyCond.Type.ILIKE, "city", "rome%");
+        PlainAttrValue value = mockValue("rome%", null);
+
+        searchDAO.fillAttrQuery(query, value, schema, cond, false, parameters);
+
+        /*
+         * ILIKE combines pattern matching and case-insensitive comparison.
+         * The wildcard symbol is translated into a regular expression pattern.
+         */
+        assertTrue(query.toString().contains("toLower (n.city) =~"),
+                "TC8 failed: ILIKE translation is broken. Actual query: " + query);
+        assertEquals("rome.*", parameters.get("param0"));
+    }
+
+    @Test
+    @DisplayName("TC9: LIKE on Long")
+    public void testTC9_LIKE_Long_IncompatibleTypeError() {
+        TextStringBuilder query = new TextStringBuilder();
+        PlainSchema schema = mockSchema("age", AttrSchemaType.Long, true);
+        AnyCond cond = mockCond(AnyCond.Type.LIKE, "age", "10%");
+        PlainAttrValue value = mockValue("10%", null);
+
+        searchDAO.fillAttrQuery(query, value, schema, cond, false, parameters);
+
+        /*
+         * LIKE is meaningful only for textual schemas. With a numeric schema
+         * the method must generate the always-false condition instead of
+         * producing an invalid search.
+         */
+        assertTrue(query.toString().contains("1=2"),
+                "TC9 failed: System didn't inject the ALWAYS_FALSE_CLAUSE. Actual query: " + query);
+    }
+
+    /*
+     * TC10-TC15 cover the public lookup methods of the DAO.
+     * These tests verify how the class validates paths, calls Neo4j and maps
+     * returned identifiers back to Realm objects through RealmDAO.
+     */
+
+    @Test
+    @DisplayName("TC10: findByFullPath - Root Realm Exists")
+    public void testTC10_findByFullPath_RootValid() {
+        Realm rootRealm = mock(Realm.class);
+
+        when(neo4jClient.query(anyString())
+                .bindAll(Map.of("fullPath", "/"))
+                .fetch()
+                .one())
+                .thenReturn(Optional.of(Map.of("n.id", "root-id")));
+
+        doReturn(Optional.of(rootRealm))
+                .when(realmDAO).findById("root-id");
+
+        Optional<Realm> result = searchDAO.findByFullPath("/");
+
+        /*
+         * The root path is a valid special case and must be accepted.
+         */
+        assertTrue(result.isPresent(),
+                "TC10 failed: findByFullPath('/') should return a present Optional.");
+        assertEquals(rootRealm, result.get(),
+                "TC10 failed: Returned Realm is not the expected root Realm.");
+    }
+
+    @Test
+    @DisplayName("TC11: findByFullPath - Malformed Path Throws Exception")
+    public void testTC11_findByFullPath_MalformedPath() {
+        /*
+         * A malformed path must be rejected before querying the database.
+         */
+        assertThrows(MalformedPathException.class,
+                () -> searchDAO.findByFullPath("odd/even"),
+                "TC11 failed: malformed path should throw MalformedPathException.");
+    }
+
+    @Test
+    @DisplayName("TC12: findByName - Multiple Matching Realms")
+    public void testTC12_findByName_MultipleResults() {
+        Realm realm1 = mock(Realm.class);
+        Realm realm2 = mock(Realm.class);
+
+        when(neo4jClient.query(anyString())
+                .bindAll(Map.of("name", "finance"))
+                .fetch()
+                .all())
+                .thenReturn(List.of(
+                        Map.of("n.id", "id-1"),
+                        Map.of("n.id", "id-2")));
+
+        doReturn(Optional.of(realm1))
+                .when(realmDAO).findById("id-1");
+
+        doReturn(Optional.of(realm2))
+                .when(realmDAO).findById("id-2");
+
+        List<Realm> result = searchDAO.findByName("finance");
+
+        /*
+         * This test checks the mapping from Neo4j result rows to Realm objects.
+         */
+        assertEquals(2, result.size(),
+                "TC12 failed: findByName should return two resolved realms.");
+        assertTrue(result.contains(realm1),
+                "TC12 failed: result does not contain first Realm.");
+        assertTrue(result.contains(realm2),
+                "TC12 failed: result does not contain second Realm.");
+    }
+
+    @Test
+    @DisplayName("TC13: findChildren - Multiple Children")
+    public void testTC13_findChildren_MultipleChildren() {
+        Realm parent = mock(Realm.class);
+        Realm child1 = mock(Realm.class);
+        Realm child2 = mock(Realm.class);
+
+        when(parent.getKey()).thenReturn("parent-id");
+
+        when(neo4jClient.query(anyString())
+                .bindAll(Map.of("id", "parent-id"))
+                .fetch()
+                .all())
+                .thenReturn(List.of(
+                        Map.of("c.id", "child-1"),
+                        Map.of("c.id", "child-2")));
+
+        doReturn(Optional.of(child1))
+                .when(realmDAO).findById("child-1");
+
+        doReturn(Optional.of(child2))
+                .when(realmDAO).findById("child-2");
+
+        List<Realm> result = searchDAO.findChildren(parent);
+
+        /*
+         * This verifies the direct parent-child navigation query.
+         */
+        assertEquals(2, result.size(),
+                "TC13 failed: findChildren should return two children.");
+        assertTrue(result.contains(child1),
+                "TC13 failed: result does not contain first child.");
+        assertTrue(result.contains(child2),
+                "TC13 failed: result does not contain second child.");
+    }
+
+    @Test
+    @DisplayName("TC14: findDescendants - Root Base Without Prefix")
+    public void testTC14_findDescendants_RootWithoutPrefix() {
+        when(neo4jClient.query(anyString())
+                .bindAll(argThat((Map<String, Object> params) ->
+                        "/".equals(params.get("base"))
+                                && "/.*".equals(params.get("like"))
+                                && !params.containsKey("prefix")
+                                && !params.containsKey("likePrefix")))
+                .fetch()
+                .all())
+                .thenReturn(List.of());
+
+        List<Realm> result = searchDAO.findDescendants("/", null);
+
+        /*
+         * The root realm uses a specific descendant pattern.
+         */
+        assertTrue(result.isEmpty(),
+                "TC14 failed: root descendants query should return an empty list in this mocked scenario.");
+    }
+
+    @Test
+    @DisplayName("TC15: findDescendants - Non Root Base With Prefix")
+    public void testTC15_findDescendants_WithPrefix() {
+        when(neo4jClient.query(anyString())
+                .bindAll(argThat((Map<String, Object> params) ->
+                        "/odd".equals(params.get("base"))
+                                && "/odd/.*".equals(params.get("like"))
+                                && "/odd/two".equals(params.get("prefix"))
+                                && "/odd/two/.*".equals(params.get("likePrefix"))))
+                .fetch()
+                .all())
+                .thenReturn(List.of());
+
+        List<Realm> result = searchDAO.findDescendants("/odd", "/odd/two");
+
+        /*
+         * This covers the case where both base and prefix restrict the search.
+         */
+        assertTrue(result.isEmpty(),
+                "TC15 failed: descendants with prefix should return an empty list in this mocked scenario.");
+    }
+
+    /*
+     * TC16 and TC17 cover compound SearchCond objects.
+     * The objective is to check that the generated query combines the two
+     * leaf conditions with the expected boolean operator.
+     */
+
+    @Test
+    @DisplayName("TC16: SearchCond AND - Combines Two Leaf Conditions")
+    public void testTC16_SearchCond_AND() {
+        SearchCond left = mockLeafAuxClassCond("classA");
+        SearchCond right = mockLeafResourceCond("resource-db");
+        SearchCond andCond = mockAndCond(left, right);
+
+        Map<String, Object> params = new HashMap<>();
+
+        Neo4jRealmSearchDAO.QueryInfo queryInfo = searchDAO.getQuery(andCond, params);
+
+        assertTrue(queryInfo.query().toString().contains(" AND EXISTS"),
+                "TC16 failed: AND condition was not translated into AND EXISTS. Actual query: "
+                        + queryInfo.query());
+        assertEquals(2, params.size(),
+                "TC16 failed: AND condition should generate two query parameters.");
+    }
+
+    @Test
+    @DisplayName("TC17: SearchCond OR - Combines Two Leaf Conditions")
+    public void testTC17_SearchCond_OR() {
+        SearchCond left = mockLeafAuxClassCond("classA");
+        SearchCond right = mockLeafResourceCond("resource-db");
+        SearchCond orCond = mockOrCond(left, right);
+
+        Map<String, Object> params = new HashMap<>();
+
+        Neo4jRealmSearchDAO.QueryInfo queryInfo = searchDAO.getQuery(orCond, params);
+
+        assertTrue(queryInfo.query().toString().contains(" OR EXISTS"),
+                "TC17 failed: OR condition was not translated into OR EXISTS. Actual query: "
+                        + queryInfo.query());
+        assertEquals(2, params.size(),
+                "TC17 failed: OR condition should generate two query parameters.");
+    }
+
+    /*
+     * TC18 and TC19 cover two final aspects of the search operation:
+     * ordering validation and pagination.
+     */
+
+    @Test
+    @DisplayName("TC18: parseOrderBy - Multiple Unique Plain Schemas Are Invalid")
+    public void testTC18_parseOrderBy_MultipleUniqueSchemasInvalid() {
+        PlainSchema schema1 = mockSchema("code1", AttrSchemaType.String, true);
+        PlainSchema schema2 = mockSchema("code2", AttrSchemaType.String, true);
+
+        when(realmUtils.getField(anyString())).thenReturn(Optional.empty());
+
+        doReturn(Optional.of(schema1))
+                .when(plainSchemaDAO).findById("code1");
+
+        doReturn(Optional.of(schema2))
+                .when(plainSchemaDAO).findById("code2");
+
+        /*
+         * The DAO does not allow ordering by more than one unique plain
+         * attribute. This test covers the invalid search parameter path.
+         */
+        assertThrows(SyncopeClientException.class,
+                () -> searchDAO.parseOrderBy(
+                        Streamable.of(
+                                Sort.Order.asc("code1"),
+                                Sort.Order.asc("code2"))),
+                "TC18 failed: ordering by more than one unique plain schema should throw SyncopeClientException.");
+    }
+
+    @Test
+    @DisplayName("TC19: doSearch - Paged Search Adds SKIP and LIMIT")
+    public void testTC19_doSearch_Paginated() {
+        searchDAO = new Neo4jRealmSearchDAO(
+                realmDAO,
+                plainSchemaDAO,
+                null,
+                null,
+                null,
+                null,
+                realmUtils,
+                neo4jTemplate,
+                neo4jClient) {
+
+            @Override
+            protected QueryInfo getQuery(final SearchCond cond, final Map<String, Object> parameters) {
+                parameters.put("param0", "odd");
+
+                TextStringBuilder query =
+                        new TextStringBuilder("MATCH (n) WHERE n.name=$param0 ");
+
+                return new QueryInfo(
+                        query,
+                        new HashSet<>(Set.of("name")),
+                        new HashSet<>());
+            }
+        };
+
+        SearchCond cond = mock(SearchCond.class);
+        Realm realm = mock(Realm.class);
+
+        when(realmUtils.getField("name")).thenReturn(Optional.of(mockRealmField()));
+
+        doReturn(Optional.empty())
+                .when(plainSchemaDAO).findById("name");
+
+        when(neo4jClient.query(argThat((String query) ->
+                query.contains("SKIP 20")
+                        && query.contains("LIMIT 10")))
+                .bindAll(anyMap())
+                .fetch()
+                .all())
+                .thenReturn(List.of(Map.of("id", "realm-id")));
+
+        doReturn(Optional.of(realm))
+                .when(realmDAO).findById("realm-id");
+
+        List<Realm> result = searchDAO.doSearch(
+                Set.of("/"),
+                cond,
+                PageRequest.of(2, 10, Sort.by(Sort.Order.asc("name"))));
+
+        /*
+         * Page number 2 with size 10 must produce SKIP 20 and LIMIT 10.
+         */
+        assertEquals(1, result.size(),
+                "TC19 failed: paginated search should return one resolved realm.");
+        assertEquals(realm, result.get(0),
+                "TC19 failed: returned realm is not the expected one.");
+    }
+}
+Now, generate Junit 5 test cases to comprehensively test all methods in the following class named Neo4jRealmSearchDAO. Your output file must start with //###Test START## and finish with //###Test END##. Here is the source code/*
+ * Licensed to the Apache Software Foundation (ASF) under one
+ * or more contributor license agreements.  See the NOTICE file
+ * distributed with this work for additional information
+ * regarding copyright ownership.  The ASF licenses this file
+ * to you under the Apache License, Version 2.0 (the
+ * "License"); you may not use this file except in compliance
+ * with the License.  You may obtain a copy of the License at
+ *
+ *   http://www.apache.org/licenses/LICENSE-2.0
+ *
+ * Unless required by applicable law or agreed to in writing,
+ * software distributed under the License is distributed on an
+ * "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY
+ * KIND, either express or implied.  See the License for the
+ * specific language governing permissions and limitations
+ * under the License.
+ */
+package org.apache.syncope.core.persistence.neo4j.dao;
+
+import java.time.format.DateTimeFormatter;
+import java.util.ArrayList;
+import java.util.Collection;
+import java.util.HashMap;
+import java.util.HashSet;
+import java.util.List;
+import java.util.Map;
+import java.util.Optional;
+import java.util.Set;
+import java.util.concurrent.atomic.AtomicInteger;
+import java.util.stream.Collectors;
+import java.util.stream.Stream;
+import org.apache.commons.lang3.StringUtils;
+import org.apache.commons.lang3.Strings;
+import org.apache.commons.text.TextStringBuilder;
+import org.apache.syncope.common.lib.SyncopeClientException;
+import org.apache.syncope.common.lib.SyncopeConstants;
+import org.apache.syncope.common.lib.types.AttrSchemaType;
+import org.apache.syncope.common.lib.types.ClientExceptionType;
+import org.apache.syncope.core.persistence.api.attrvalue.PlainAttrValidationManager;
+import org.apache.syncope.core.persistence.api.dao.GroupDAO;
+import org.apache.syncope.core.persistence.api.dao.MalformedPathException;
+import org.apache.syncope.core.persistence.api.dao.PlainSchemaDAO;
+import org.apache.syncope.core.persistence.api.dao.RealmDAO;
+import org.apache.syncope.core.persistence.api.dao.UserDAO;
+import org.apache.syncope.core.persistence.api.dao.search.AnyCond;
+import org.apache.syncope.core.persistence.api.dao.search.AttrCond;
+import org.apache.syncope.core.persistence.api.dao.search.AuxClassCond;
+import org.apache.syncope.core.persistence.api.dao.search.ResourceCond;
+import org.apache.syncope.core.persistence.api.dao.search.SearchCond;
+import org.apache.syncope.core.persistence.api.entity.EntityFactory;
+import org.apache.syncope.core.persistence.api.entity.PlainAttrValue;
+import org.apache.syncope.core.persistence.api.entity.PlainSchema;
+import org.apache.syncope.core.persistence.api.entity.Realm;
+import org.apache.syncope.core.persistence.api.utils.RealmUtils;
+import org.apache.syncope.core.persistence.common.dao.AbstractRealmSearchDAO;
+import org.apache.syncope.core.persistence.neo4j.dao.repo.AnyRepoExt;
+import org.apache.syncope.core.persistence.neo4j.entity.Neo4jAnyTypeClass;
+import org.apache.syncope.core.persistence.neo4j.entity.Neo4jExternalResource;
+import org.apache.syncope.core.persistence.neo4j.entity.Neo4jRealm;
+import org.springframework.data.domain.Pageable;
+import org.springframework.data.domain.Sort;
+import org.springframework.data.domain.Sort.Order;
+import org.springframework.data.neo4j.core.Neo4jClient;
+import org.springframework.data.neo4j.core.Neo4jTemplate;
+import org.springframework.data.util.Streamable;
+import org.springframework.transaction.annotation.Transactional;
+
+public class Neo4jRealmSearchDAO extends AbstractRealmSearchDAO {
+
+    protected record AnyCondQuery(String query, String field) {
+
+    }
+
+    protected record AttrCondQuery(String query, PlainSchema schema) {
+
+    }
+
+    protected record QueryInfo(
+            TextStringBuilder query,
+            Set<String> fields,
+            Set<PlainSchema> plainSchemas) {
+
+    }
+
+    protected static String setParameter(final Map<String, Object> parameters, final Object parameter) {
+        String name = "param" + parameters.size();
+        parameters.put(name, parameter);
+        return name;
+    }
+
+    protected static void appendPlainAttrCond(
+            final TextStringBuilder query, final PlainSchema schema, final String cond) {
+
+        if (schema.isUniqueConstraint()) {
+            query.append(schema.getKey()).append('.').append(key(schema.getType())).append(cond);
+        } else {
+            query.append("any(k IN ").append(schema.getKey()).
+                    append(" WHERE k").append('.').append(key(schema.getType())).append(cond).
+                    append(")");
+        }
+    }
+
+    protected static String escapeIfString(final String value, final boolean isStr) {
+        return isStr
+                ? new StringBuilder().append('"').append(value).append('"').toString()
+                : value;
+    }
+
+    protected static void queryOp(
+            final TextStringBuilder query,
+            final String op,
+            final QueryInfo leftInfo,
+            final QueryInfo rightInfo) {
+
+        query.append("WHERE EXISTS { ").
+                append(Strings.CS.prependIfMissing(leftInfo.query().toString(), "MATCH (n) ")).
+                append(" } ").
+                append(op).append(" EXISTS { ").
+                append(Strings.CS.prependIfMissing(rightInfo.query().toString(), "MATCH (n) ")).
+                append(" }");
+    }
+
+    protected final RealmDAO realmDAO;
+
+    protected final RealmUtils realmUtils;
+
+    protected final Neo4jTemplate neo4jTemplate;
+
+    protected final Neo4jClient neo4jClient;
+
+    public Neo4jRealmSearchDAO(
+            final RealmDAO realmDAO,
+            final PlainSchemaDAO plainSchemaDAO,
+            final UserDAO userDAO,
+            final GroupDAO groupDAO,
+            final EntityFactory entityFactory,
+            final PlainAttrValidationManager validator,
+            final RealmUtils realmUtils,
+            final Neo4jTemplate neo4jTemplate,
+            final Neo4jClient neo4jClient) {
+
+        super(plainSchemaDAO, userDAO, groupDAO, entityFactory, validator);
+        this.realmDAO = realmDAO;
+        this.realmUtils = realmUtils;
+        this.neo4jTemplate = neo4jTemplate;
+        this.neo4jClient = neo4jClient;
+    }
+
+    @Transactional(readOnly = true)
+    @Override
+    public Optional<Realm> findByFullPath(final String fullPath) {
+        if (StringUtils.isBlank(fullPath)
+                || (!SyncopeConstants.ROOT_REALM.equals(fullPath)
+                && !RealmDAO.PATH_PATTERN.matcher(fullPath).matches())) {
+
+            throw new MalformedPathException(fullPath);
+        }
+
+        return neo4jClient.query(
+                "MATCH (n:" + Neo4jRealm.NODE + ") WHERE n.fullPath = $fullPath RETURN n.id").
+                bindAll(Map.of("fullPath", fullPath)).fetch().one().
+                flatMap(found -> realmDAO.findById(found.get("n.id").toString()).map(n -> (Realm) n));
+    }
+
+    protected List<Realm> toList(
+            final Collection<Map<String, Object>> result,
+            final String property) {
+
+        return result.stream().
+                map(found -> realmDAO.findById(found.get(property).toString())).
+                flatMap(Optional::stream).map(n -> (Realm) n).toList();
+    }
+
+    @Override
+    public List<Realm> findByName(final String name) {
+        return toList(neo4jClient.query(
+                "MATCH (n:" + Neo4jRealm.NODE + ") WHERE n.name = $name RETURN n.id").
+                bindAll(Map.of("name", name)).fetch().all(), "n.id");
+    }
+
+    @Override
+    public List<Realm> findChildren(final Realm realm) {
+        return toList(neo4jClient.query(
+                "MATCH (n:" + Neo4jRealm.NODE + " {id: $id})<-[r:" + Neo4jRealm.PARENT_REL + "]-(c) RETURN c.id").
+                bindAll(Map.of("id", realm.getKey())).fetch().all(), "c.id");
+    }
+
+    @Override
+    public List<Realm> findDescendants(final String base, final String prefix) {
+        Map<String, Object> parameters = new HashMap<>();
+
+        StringBuilder query = new StringBuilder("MATCH (n:").append(Neo4jRealm.NODE).append(") ").
+                append("WHERE (").append("n.fullPath = $base OR n.fullPath =~ $like").append(')');
+        parameters.put("base", base);
+        parameters.put("like", SyncopeConstants.ROOT_REALM.equals(base) ? "/.*" : base + "/.*");
+
+        if (prefix != null) {
+            query.append(" AND (n.fullPath = $prefix OR n.fullPath =~ $likePrefix)");
+            parameters.put("prefix", prefix);
+            parameters.put("likePrefix", SyncopeConstants.ROOT_REALM.equals(prefix) ? "/.*" : prefix + "/.*");
+        }
+
+        query.append(" RETURN n.id ORDER BY n.fullPath");
+
+        return toList(neo4jClient.query(
+                query.toString()).bindAll(parameters).fetch().all(), "n.id");
+    }
+
+    protected QueryInfo getQuery(final SearchCond cond, final Map<String, Object> parameters) {
+        boolean not = cond.getType() == SearchCond.Type.NOT_LEAF;
+
+        TextStringBuilder query = new TextStringBuilder();
+        Set<String> involvedFields = new HashSet<>();
+        Set<PlainSchema> involvedPlainSchemas = new HashSet<>();
+
+        switch (cond.getType()) {
+            case LEAF, NOT_LEAF -> {
+                cond.asLeaf(AuxClassCond.class).
+                        ifPresent(leaf -> query.append(getQuery(leaf, not, parameters)));
+
+                cond.asLeaf(ResourceCond.class).
+                        ifPresent(leaf -> query.append(getQuery(leaf, not, parameters)));
+
+                cond.asLeaf(AnyCond.class).ifPresentOrElse(
+                        anyCond -> {
+                            AnyCondQuery anyCondQuery = getQuery(anyCond, not, parameters);
+                            query.append(anyCondQuery.query());
+                            Optional.ofNullable(anyCondQuery.field()).ifPresent(involvedFields::add);
+                        },
+                        () -> cond.asLeaf(AttrCond.class).ifPresent(leaf -> {
+                            AttrCondQuery attrCondQuery = getQuery(leaf, not, parameters);
+                            query.append(attrCondQuery.query());
+                            involvedPlainSchemas.add(attrCondQuery.schema());
+                        }));
+
+                // allow for additional search conditions
+                getQueryForCustomConds(cond, parameters, not, query);
+            }
+            case AND -> {
+                QueryInfo leftAndInfo = getQuery(cond.getLeft(), parameters);
+                involvedFields.addAll(leftAndInfo.fields());
+                involvedPlainSchemas.addAll(leftAndInfo.plainSchemas());
+
+                QueryInfo rigthAndInfo = getQuery(cond.getRight(), parameters);
+                involvedFields.addAll(rigthAndInfo.fields());
+                involvedPlainSchemas.addAll(rigthAndInfo.plainSchemas());
+
+                queryOp(query, "AND", leftAndInfo, rigthAndInfo);
+            }
+
+            case OR -> {
+                QueryInfo leftOrInfo = getQuery(cond.getLeft(), parameters);
+                involvedFields.addAll(leftOrInfo.fields());
+                involvedPlainSchemas.addAll(leftOrInfo.plainSchemas());
+
+                QueryInfo rigthOrInfo = getQuery(cond.getRight(), parameters);
+                involvedFields.addAll(rigthOrInfo.fields());
+                involvedPlainSchemas.addAll(rigthOrInfo.plainSchemas());
+
+                queryOp(query, "OR", leftOrInfo, rigthOrInfo);
+            }
+
+            default -> {
+            }
+        }
+
+        return new QueryInfo(query, involvedFields, involvedPlainSchemas);
+    }
+
+    protected void wrapQuery(
+            final Set<String> bases,
+            final QueryInfo queryInfo,
+            final Streamable<Order> orderBy,
+            final Map<String, Object> parameters) {
+
+        TextStringBuilder match = new TextStringBuilder("MATCH (n:").append(Neo4jRealm.NODE).append(") ").
+                append("WITH n.id AS id");
+
+        // take fields into account
+        queryInfo.fields().remove("id");
+        Stream.concat(
+                queryInfo.fields().stream(),
+                orderBy.stream().filter(clause -> !"id".equals(clause.getProperty())
+                && realmUtils.getField(clause.getProperty()).isPresent()).map(Order::getProperty)).
+                distinct().forEach(field -> match.append(", n.").append(field).append(" AS ").append(field));
+
+        // take plain schemas into account
+        Stream.concat(
+                queryInfo.plainSchemas().stream(),
+                orderBy.stream().map(clause -> plainSchemaDAO.findById(clause.getProperty())).
+                        flatMap(Optional::stream)).distinct().forEach(schema -> {
+
+            match.append(", apoc.convert.getJsonProperty(n, 'plainAttrs.").append(schema.getKey());
+            if (schema.isUniqueConstraint()) {
+                match.append("', '$.uniqueValue')");
+            } else {
+                match.append("', '$.values')");
+            }
+            match.append(" AS ").append(schema.getKey());
+        });
+
+        TextStringBuilder query = queryInfo.query();
+
+        // take bases into account
+        AtomicInteger index = new AtomicInteger(0);
+        String basesClause = bases.stream().map(base -> {
+            int idx = index.incrementAndGet();
+            parameters.put("base" + idx, base);
+            parameters.put("like" + idx, SyncopeConstants.ROOT_REALM.equals(base) ? "/.*" : base + "/.*");
+            return "n.fullPath = $base" + idx + " OR n.fullPath =~ $like" + idx;
+        }).collect(Collectors.joining(" OR "));
+        if (query.startsWith("MATCH (n)")) {
+            query.replaceFirst("MATCH (n)", match + " WHERE (EXISTS { MATCH (n)");
+            query.append("} ");
+        } else {
+            query.replaceFirst("WHERE EXISTS", "WHERE (EXISTS");
+            query.insert(0, match.append(' '));
+        }
+        query.append(") AND EXISTS { ").append("(n) WHERE (").append(basesClause).append(")").append(" } ");
+    }
+
+    protected AttrCondQuery getQuery(
+            final AttrCond cond,
+            final boolean not,
+            final Map<String, Object> parameters) {
+
+        CheckResult<AttrCond> checked = check(cond);
+
+        TextStringBuilder query = new TextStringBuilder("MATCH (n) ");
+        switch (cond.getType()) {
+            case ISNOTNULL ->
+                query.append("WHERE n.`plainAttrs.").append(checked.schema().getKey()).append("` IS NOT NULL");
+
+            case ISNULL ->
+                query.append("WHERE n.`plainAttrs.").append(checked.schema().getKey()).append("` IS NULL");
+
+            default ->
+                fillAttrQuery(query, checked.value(), checked.schema(), cond, not, parameters);
+        }
+
+        return new AttrCondQuery(query.toString(), checked.schema());
+    }
+
+    protected String getQuery(
+            final AuxClassCond cond,
+            final boolean not,
+            final Map<String, Object> parameters) {
+
+        return "MATCH (n) "
+                + "WHERE " + (not ? "NOT " : "") + "(n)-[]-"
+                + "(:" + Neo4jAnyTypeClass.NODE + " {id: $" + setParameter(parameters, cond.getAuxClass()) + "}) ";
+    }
+
+    protected String getQuery(
+            final ResourceCond cond,
+            final boolean not,
+            final Map<String, Object> parameters) {
+
+        return "MATCH (n) "
+                + "WHERE " + (not ? "NOT " : "") + "(n)-[]-"
+                + "(:" + Neo4jExternalResource.NODE + " {id: $" + setParameter(parameters, cond.getResource()) + "}) ";
+    }
+
+    protected void getQueryForCustomConds(
+            final SearchCond cond,
+            final Map<String, Object> parameters,
+            final boolean not,
+            final TextStringBuilder query) {
+
+        // do nothing by default, leave it open for subclasses
+    }
+
+    protected void fillAttrQuery(
+            final TextStringBuilder query,
+            final PlainAttrValue attrValue,
+            final PlainSchema schema,
+            final AttrCond cond,
+            final boolean not,
+            final Map<String, Object> parameters) {
+
+        if (not && cond.getType() == AttrCond.Type.ISNULL) {
+            cond.setType(AttrCond.Type.ISNOTNULL);
+            fillAttrQuery(query, attrValue, schema, cond, true, parameters);
+            return;
+        }
+        if (not) {
+            if (schema.isUniqueConstraint()) {
+                fillAttrQuery(query, attrValue, schema, cond, false, parameters);
+                query.replaceFirst("WHERE", "WHERE NOT(");
+                query.append(')');
+            } else {
+                fillAttrQuery(query, attrValue, schema, cond, false, parameters);
+                query.replaceAll("any(", schema.getKey() + " IS NULL OR none(");
+            }
+            return;
+        }
+
+        String value = Optional.ofNullable(attrValue.getDateValue()).
+                map(DateTimeFormatter.ISO_OFFSET_DATE_TIME::format).
+                orElseGet(cond::getExpression);
+
+        boolean isStr = true;
+        boolean lower = false;
+        if (schema.getType().isStringClass()) {
+            lower = (cond.getType() == AttrCond.Type.IEQ || cond.getType() == AttrCond.Type.ILIKE);
+        } else if (schema.getType() != AttrSchemaType.Date) {
+            lower = false;
+            try {
+                switch (schema.getType()) {
+                    case Long ->
+                        Long.valueOf(value);
+
+                    case Double ->
+                        Double.valueOf(value);
+
+                    case Boolean -> {
+                        if (!("true".equalsIgnoreCase(value) || "false".equalsIgnoreCase(value))) {
+                            throw new IllegalArgumentException();
+                        }
+                    }
+
+                    default -> {
+                    }
+                }
+
+                isStr = false;
+            } catch (Exception nfe) {
+                // ignore
+            }
+        }
+
+        query.append("WHERE ");
+
+        switch (cond.getType()) {
+            case ISNULL -> {
+            }
+
+            case ISNOTNULL ->
+                query.append(schema.getKey()).append(" IS NOT NULL");
+
+            case ILIKE, LIKE -> {
+                if (schema.getType().isStringClass()) {
+                    appendPlainAttrCond(
+                            query,
+                            schema,
+                            " =~ \"" + (lower ? "(?i)" : "")
+                            + AnyRepoExt.escapeForLikeRegex(value).replace("%", ".*") + '"');
+                } else {
+                    query.append(ALWAYS_FALSE_CLAUSE);
+                    LOG.error("LIKE is only compatible with string or enum schemas");
+                }
+            }
+
+            case IEQ, EQ -> {
+                if (StringUtils.containsAny(value, AnyRepoExt.REGEX_CHARS) || lower) {
+                    appendPlainAttrCond(
+                            query,
+                            schema,
+                            " =~ \"^" + (lower ? "(?i)" : "")
+                            + AnyRepoExt.escapeForLikeRegex(value).replace("%", ".*") + "$\"");
+                } else {
+                    appendPlainAttrCond(
+                            query,
+                            schema,
+                            " = " + escapeIfString(value, isStr));
+                }
+            }
+
+            case GE ->
+                appendPlainAttrCond(
+                        query,
+                        schema,
+                        " >= " + escapeIfString(value, isStr));
+
+            case GT ->
+                appendPlainAttrCond(
+                        query,
+                        schema,
+                        " > " + escapeIfString(value, isStr));
+
+            case LE ->
+                appendPlainAttrCond(
+                        query,
+                        schema,
+                        " <= " + escapeIfString(value, isStr));
+
+            case LT ->
+                appendPlainAttrCond(
+                        query,
+                        schema,
+                        " < " + escapeIfString(value, isStr));
+
+            default -> {
+            }
+        }
+        // shouldn't occour: processed before
+    }
+
+    protected void fillAttrQuery(
+            final TextStringBuilder query,
+            final PlainAttrValue attrValue,
+            final PlainSchema schema,
+            final AnyCond cond,
+            final boolean not,
+            final Map<String, Object> parameters) {
+
+        if (not && cond.getType() == AttrCond.Type.ISNULL) {
+            cond.setType(AttrCond.Type.ISNOTNULL);
+            fillAttrQuery(query, attrValue, schema, cond, true, parameters);
+            return;
+        }
+        if (not) {
+            query.append("NOT (");
+            fillAttrQuery(query, attrValue, schema, cond, false, parameters);
+            query.append(')');
+            return;
+        }
+        if (not && cond.getType() == AttrCond.Type.ISNULL) {
+            cond.setType(AttrCond.Type.ISNOTNULL);
+            fillAttrQuery(query, attrValue, schema, cond, true, parameters);
+            return;
+        }
+
+        boolean lower = schema.getType().isStringClass()
+                && (cond.getType() == AttrCond.Type.IEQ || cond.getType() == AttrCond.Type.ILIKE);
+
+        String property = "n." + cond.getSchema();
+        if (lower) {
+            property = "toLower (" + property + ')';
+        }
+
+        switch (cond.getType()) {
+
+            case ISNULL ->
+                query.append(property).append(" IS NULL");
+
+            case ISNOTNULL ->
+                query.append(property).append(" IS NOT NULL");
+
+            case ILIKE, LIKE -> {
+                if (schema.getType().isStringClass()) {
+                    query.append(property).append(" =~ ");
+                    if (lower) {
+                        query.append("toLower($").
+                                append(setParameter(parameters, cond.getExpression().replace("%", ".*"))).
+                                append(')');
+                    } else {
+                        query.append('$').append(setParameter(parameters, cond.getExpression().replace("%", ".*")));
+                    }
+                } else {
+                    query.append(' ').append(ALWAYS_FALSE_CLAUSE);
+                    LOG.error("LIKE is only compatible with string or enum schemas");
+                }
+            }
+
+            case IEQ, EQ -> {
+                query.append(property).append('=');
+
+                if (lower) {
+                    query.append("toLower($").append(setParameter(parameters, attrValue.getValue())).append(')');
+                } else {
+                    query.append('$').append(setParameter(parameters, attrValue.getValue()));
+                }
+            }
+
+            case GE -> {
+                query.append(property);
+                if (not) {
+                    query.append('<');
+                } else {
+                    query.append(">=");
+                }
+                query.append('$').append(setParameter(parameters, attrValue.getValue()));
+            }
+
+            case GT -> {
+                query.append(property);
+                if (not) {
+                    query.append("<=");
+                } else {
+                    query.append('>');
+                }
+                query.append('$').append(setParameter(parameters, attrValue.getValue()));
+            }
+
+            case LE -> {
+                query.append(property);
+                if (not) {
+                    query.append('>');
+                } else {
+                    query.append("<=");
+                }
+                query.append('$').append(setParameter(parameters, attrValue.getValue()));
+            }
+
+            case LT -> {
+                query.append(property);
+                if (not) {
+                    query.append(">=");
+                } else {
+                    query.append('<');
+                }
+                query.append('$').append(setParameter(parameters, attrValue.getValue()));
+            }
+
+            default -> {
+            }
+        }
+    }
+
+    protected AnyCondQuery getQuery(
+            final AnyCond cond,
+            final boolean not,
+            final Map<String, Object> parameters) {
+
+        CheckResult<AnyCond> checked = check(
+                cond,
+                realmUtils.getField(cond.getSchema()).
+                        orElseThrow(() -> new IllegalArgumentException("Invalid schema " + cond.getSchema())),
+                RELATIONSHIP_FIELDS);
+
+        TextStringBuilder query = new TextStringBuilder("MATCH (n) WHERE ");
+
+        fillAttrQuery(query, checked.value(), checked.schema(), checked.cond(), not, parameters);
+
+        return new AnyCondQuery(query.toString(), checked.cond().getSchema());
+    }
+
+    @Override
+    protected long doCount(final Set<String> bases, final SearchCond cond) {
+        Map<String, Object> parameters = new HashMap<>();
+
+        QueryInfo queryInfo = getQuery(cond, parameters);
+
+        wrapQuery(bases, queryInfo, Streamable.empty(), parameters);
+        TextStringBuilder query = queryInfo.query();
+
+        query.append("RETURN COUNT(id)");
+
+        LOG.debug("Query: {}, parameters: {}", query, parameters);
+
+        return neo4jTemplate.count(query.toString(), parameters);
+    }
+
+    protected List<String> parseOrderBy(final Streamable<Sort.Order> orderBy) {
+        List<String> clauses = new ArrayList<>();
+
+        Set<String> orderByUniquePlainSchemas = new HashSet<>();
+        Set<String> orderByNonUniquePlainSchemas = new HashSet<>();
+        orderBy.forEach(clause -> {
+            if (realmUtils.getField(clause.getProperty()).isPresent()) {
+                clauses.add(clause.getProperty() + " " + clause.getDirection().name());
+            } else {
+                plainSchemaDAO.findById(clause.getProperty()).ifPresent(schema -> {
+                    if (schema.isUniqueConstraint()) {
+                        orderByUniquePlainSchemas.add(schema.getKey());
+                    } else {
+                        orderByNonUniquePlainSchemas.add(schema.getKey());
+                    }
+                    if (orderByUniquePlainSchemas.size() > 1 || orderByNonUniquePlainSchemas.size() > 1) {
+                        SyncopeClientException invalidSearch =
+                                SyncopeClientException.build(ClientExceptionType.InvalidSearchParameters);
+                        invalidSearch.getElements().add("Order by more than one attribute is not allowed; "
+                                + "remove one from " + (orderByUniquePlainSchemas.size() > 1
+                                ? orderByUniquePlainSchemas : orderByNonUniquePlainSchemas));
+                        throw invalidSearch;
+                    }
+
+                    clauses.add(schema.getKey() + " " + clause.getDirection().name());
+                });
+            }
+        });
+
+        return clauses;
+    }
+
+    @Override
+    protected List<Realm> doSearch(final Set<String> bases, final SearchCond cond, final Pageable pageable) {
+        Map<String, Object> parameters = new HashMap<>();
+
+        QueryInfo queryInfo = getQuery(cond, parameters);
+
+        wrapQuery(bases, queryInfo, pageable.getSort(), parameters);
+        TextStringBuilder query = queryInfo.query();
+
+        List<String> orderBy = parseOrderBy(pageable.getSort());
+        String orderByStmt = String.join(", ", orderBy);
+
+        query.append("RETURN id ").
+                append("ORDER BY ").append(orderByStmt);
+
+        if (pageable.isPaged()) {
+            query.append(" SKIP ").append(pageable.getPageSize() * pageable.getPageNumber()).
+                    append(" LIMIT ").append(pageable.getPageSize());
+        }
+
+        LOG.debug("Query: {}, parameters: {}", query, parameters);
+
+        return toList(neo4jClient.query(
+                query.toString()).bindAll(parameters).fetch().all(), "id");
+    }
+}
+
+Guided Tree of Thoughts
+
+Imagine three different experts in software testing who are tasked with developing comprehensive JUnit 5 test cases for the following Java class. To comprehensively test all methods in the following class named Neo4jRealmSearchDAO they must follow these steps: - Extract and list all the public methods including their signatures - For each method, generate a basic JUnit 5 test case that checks the method's functionality - Given the source code of the class and the listed methods, identify potential edge cases and exception handling scenarios that should be tested - Generate JUnit 5 test cases that specifically test for the identified edge cases and exceptions - Merge all the individual test cases into a complete JUnit 5 test file (Neo4jRealmSearchDAOGToTTest.java) for the given Java class. All experts will propose one test cases for each method, share it with the group, and then proceed to the next step. If any expert realizes they're wrong at any point, they leave. The Java class is:/*
+ * Licensed to the Apache Software Foundation (ASF) under one
+ * or more contributor license agreements.  See the NOTICE file
+ * distributed with this work for additional information
+ * regarding copyright ownership.  The ASF licenses this file
+ * to you under the Apache License, Version 2.0 (the
+ * "License"); you may not use this file except in compliance
+ * with the License.  You may obtain a copy of the License at
+ *
+ *   http://www.apache.org/licenses/LICENSE-2.0
+ *
+ * Unless required by applicable law or agreed to in writing,
+ * software distributed under the License is distributed on an
+ * "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY
+ * KIND, either express or implied.  See the License for the
+ * specific language governing permissions and limitations
+ * under the License.
+ */
+package org.apache.syncope.core.persistence.neo4j.dao;
+
+import java.time.format.DateTimeFormatter;
+import java.util.ArrayList;
+import java.util.Collection;
+import java.util.HashMap;
+import java.util.HashSet;
+import java.util.List;
+import java.util.Map;
+import java.util.Optional;
+import java.util.Set;
+import java.util.concurrent.atomic.AtomicInteger;
+import java.util.stream.Collectors;
+import java.util.stream.Stream;
+import org.apache.commons.lang3.StringUtils;
+import org.apache.commons.lang3.Strings;
+import org.apache.commons.text.TextStringBuilder;
+import org.apache.syncope.common.lib.SyncopeClientException;
+import org.apache.syncope.common.lib.SyncopeConstants;
+import org.apache.syncope.common.lib.types.AttrSchemaType;
+import org.apache.syncope.common.lib.types.ClientExceptionType;
+import org.apache.syncope.core.persistence.api.attrvalue.PlainAttrValidationManager;
+import org.apache.syncope.core.persistence.api.dao.GroupDAO;
+import org.apache.syncope.core.persistence.api.dao.MalformedPathException;
+import org.apache.syncope.core.persistence.api.dao.PlainSchemaDAO;
+import org.apache.syncope.core.persistence.api.dao.RealmDAO;
+import org.apache.syncope.core.persistence.api.dao.UserDAO;
+import org.apache.syncope.core.persistence.api.dao.search.AnyCond;
+import org.apache.syncope.core.persistence.api.dao.search.AttrCond;
+import org.apache.syncope.core.persistence.api.dao.search.AuxClassCond;
+import org.apache.syncope.core.persistence.api.dao.search.ResourceCond;
+import org.apache.syncope.core.persistence.api.dao.search.SearchCond;
+import org.apache.syncope.core.persistence.api.entity.EntityFactory;
+import org.apache.syncope.core.persistence.api.entity.PlainAttrValue;
+import org.apache.syncope.core.persistence.api.entity.PlainSchema;
+import org.apache.syncope.core.persistence.api.entity.Realm;
+import org.apache.syncope.core.persistence.api.utils.RealmUtils;
+import org.apache.syncope.core.persistence.common.dao.AbstractRealmSearchDAO;
+import org.apache.syncope.core.persistence.neo4j.dao.repo.AnyRepoExt;
+import org.apache.syncope.core.persistence.neo4j.entity.Neo4jAnyTypeClass;
+import org.apache.syncope.core.persistence.neo4j.entity.Neo4jExternalResource;
+import org.apache.syncope.core.persistence.neo4j.entity.Neo4jRealm;
+import org.springframework.data.domain.Pageable;
+import org.springframework.data.domain.Sort;
+import org.springframework.data.domain.Sort.Order;
+import org.springframework.data.neo4j.core.Neo4jClient;
+import org.springframework.data.neo4j.core.Neo4jTemplate;
+import org.springframework.data.util.Streamable;
+import org.springframework.transaction.annotation.Transactional;
+
+public class Neo4jRealmSearchDAO extends AbstractRealmSearchDAO {
+
+    protected record AnyCondQuery(String query, String field) {
+
+    }
+
+    protected record AttrCondQuery(String query, PlainSchema schema) {
+
+    }
+
+    protected record QueryInfo(
+            TextStringBuilder query,
+            Set<String> fields,
+            Set<PlainSchema> plainSchemas) {
+
+    }
+
+    protected static String setParameter(final Map<String, Object> parameters, final Object parameter) {
+        String name = "param" + parameters.size();
+        parameters.put(name, parameter);
+        return name;
+    }
+
+    protected static void appendPlainAttrCond(
+            final TextStringBuilder query, final PlainSchema schema, final String cond) {
+
+        if (schema.isUniqueConstraint()) {
+            query.append(schema.getKey()).append('.').append(key(schema.getType())).append(cond);
+        } else {
+            query.append("any(k IN ").append(schema.getKey()).
+                    append(" WHERE k").append('.').append(key(schema.getType())).append(cond).
+                    append(")");
+        }
+    }
+
+    protected static String escapeIfString(final String value, final boolean isStr) {
+        return isStr
+                ? new StringBuilder().append('"').append(value).append('"').toString()
+                : value;
+    }
+
+    protected static void queryOp(
+            final TextStringBuilder query,
+            final String op,
+            final QueryInfo leftInfo,
+            final QueryInfo rightInfo) {
+
+        query.append("WHERE EXISTS { ").
+                append(Strings.CS.prependIfMissing(leftInfo.query().toString(), "MATCH (n) ")).
+                append(" } ").
+                append(op).append(" EXISTS { ").
+                append(Strings.CS.prependIfMissing(rightInfo.query().toString(), "MATCH (n) ")).
+                append(" }");
+    }
+
+    protected final RealmDAO realmDAO;
+
+    protected final RealmUtils realmUtils;
+
+    protected final Neo4jTemplate neo4jTemplate;
+
+    protected final Neo4jClient neo4jClient;
+
+    public Neo4jRealmSearchDAO(
+            final RealmDAO realmDAO,
+            final PlainSchemaDAO plainSchemaDAO,
+            final UserDAO userDAO,
+            final GroupDAO groupDAO,
+            final EntityFactory entityFactory,
+            final PlainAttrValidationManager validator,
+            final RealmUtils realmUtils,
+            final Neo4jTemplate neo4jTemplate,
+            final Neo4jClient neo4jClient) {
+
+        super(plainSchemaDAO, userDAO, groupDAO, entityFactory, validator);
+        this.realmDAO = realmDAO;
+        this.realmUtils = realmUtils;
+        this.neo4jTemplate = neo4jTemplate;
+        this.neo4jClient = neo4jClient;
+    }
+
+    @Transactional(readOnly = true)
+    @Override
+    public Optional<Realm> findByFullPath(final String fullPath) {
+        if (StringUtils.isBlank(fullPath)
+                || (!SyncopeConstants.ROOT_REALM.equals(fullPath)
+                && !RealmDAO.PATH_PATTERN.matcher(fullPath).matches())) {
+
+            throw new MalformedPathException(fullPath);
+        }
+
+        return neo4jClient.query(
+                "MATCH (n:" + Neo4jRealm.NODE + ") WHERE n.fullPath = $fullPath RETURN n.id").
+                bindAll(Map.of("fullPath", fullPath)).fetch().one().
+                flatMap(found -> realmDAO.findById(found.get("n.id").toString()).map(n -> (Realm) n));
+    }
+
+    protected List<Realm> toList(
+            final Collection<Map<String, Object>> result,
+            final String property) {
+
+        return result.stream().
+                map(found -> realmDAO.findById(found.get(property).toString())).
+                flatMap(Optional::stream).map(n -> (Realm) n).toList();
+    }
+
+    @Override
+    public List<Realm> findByName(final String name) {
+        return toList(neo4jClient.query(
+                "MATCH (n:" + Neo4jRealm.NODE + ") WHERE n.name = $name RETURN n.id").
+                bindAll(Map.of("name", name)).fetch().all(), "n.id");
+    }
+
+    @Override
+    public List<Realm> findChildren(final Realm realm) {
+        return toList(neo4jClient.query(
+                "MATCH (n:" + Neo4jRealm.NODE + " {id: $id})<-[r:" + Neo4jRealm.PARENT_REL + "]-(c) RETURN c.id").
+                bindAll(Map.of("id", realm.getKey())).fetch().all(), "c.id");
+    }
+
+    @Override
+    public List<Realm> findDescendants(final String base, final String prefix) {
+        Map<String, Object> parameters = new HashMap<>();
+
+        StringBuilder query = new StringBuilder("MATCH (n:").append(Neo4jRealm.NODE).append(") ").
+                append("WHERE (").append("n.fullPath = $base OR n.fullPath =~ $like").append(')');
+        parameters.put("base", base);
+        parameters.put("like", SyncopeConstants.ROOT_REALM.equals(base) ? "/.*" : base + "/.*");
+
+        if (prefix != null) {
+            query.append(" AND (n.fullPath = $prefix OR n.fullPath =~ $likePrefix)");
+            parameters.put("prefix", prefix);
+            parameters.put("likePrefix", SyncopeConstants.ROOT_REALM.equals(prefix) ? "/.*" : prefix + "/.*");
+        }
+
+        query.append(" RETURN n.id ORDER BY n.fullPath");
+
+        return toList(neo4jClient.query(
+                query.toString()).bindAll(parameters).fetch().all(), "n.id");
+    }
+
+    protected QueryInfo getQuery(final SearchCond cond, final Map<String, Object> parameters) {
+        boolean not = cond.getType() == SearchCond.Type.NOT_LEAF;
+
+        TextStringBuilder query = new TextStringBuilder();
+        Set<String> involvedFields = new HashSet<>();
+        Set<PlainSchema> involvedPlainSchemas = new HashSet<>();
+
+        switch (cond.getType()) {
+            case LEAF, NOT_LEAF -> {
+                cond.asLeaf(AuxClassCond.class).
+                        ifPresent(leaf -> query.append(getQuery(leaf, not, parameters)));
+
+                cond.asLeaf(ResourceCond.class).
+                        ifPresent(leaf -> query.append(getQuery(leaf, not, parameters)));
+
+                cond.asLeaf(AnyCond.class).ifPresentOrElse(
+                        anyCond -> {
+                            AnyCondQuery anyCondQuery = getQuery(anyCond, not, parameters);
+                            query.append(anyCondQuery.query());
+                            Optional.ofNullable(anyCondQuery.field()).ifPresent(involvedFields::add);
+                        },
+                        () -> cond.asLeaf(AttrCond.class).ifPresent(leaf -> {
+                            AttrCondQuery attrCondQuery = getQuery(leaf, not, parameters);
+                            query.append(attrCondQuery.query());
+                            involvedPlainSchemas.add(attrCondQuery.schema());
+                        }));
+
+                // allow for additional search conditions
+                getQueryForCustomConds(cond, parameters, not, query);
+            }
+            case AND -> {
+                QueryInfo leftAndInfo = getQuery(cond.getLeft(), parameters);
+                involvedFields.addAll(leftAndInfo.fields());
+                involvedPlainSchemas.addAll(leftAndInfo.plainSchemas());
+
+                QueryInfo rigthAndInfo = getQuery(cond.getRight(), parameters);
+                involvedFields.addAll(rigthAndInfo.fields());
+                involvedPlainSchemas.addAll(rigthAndInfo.plainSchemas());
+
+                queryOp(query, "AND", leftAndInfo, rigthAndInfo);
+            }
+
+            case OR -> {
+                QueryInfo leftOrInfo = getQuery(cond.getLeft(), parameters);
+                involvedFields.addAll(leftOrInfo.fields());
+                involvedPlainSchemas.addAll(leftOrInfo.plainSchemas());
+
+                QueryInfo rigthOrInfo = getQuery(cond.getRight(), parameters);
+                involvedFields.addAll(rigthOrInfo.fields());
+                involvedPlainSchemas.addAll(rigthOrInfo.plainSchemas());
+
+                queryOp(query, "OR", leftOrInfo, rigthOrInfo);
+            }
+
+            default -> {
+            }
+        }
+
+        return new QueryInfo(query, involvedFields, involvedPlainSchemas);
+    }
+
+    protected void wrapQuery(
+            final Set<String> bases,
+            final QueryInfo queryInfo,
+            final Streamable<Order> orderBy,
+            final Map<String, Object> parameters) {
+
+        TextStringBuilder match = new TextStringBuilder("MATCH (n:").append(Neo4jRealm.NODE).append(") ").
+                append("WITH n.id AS id");
+
+        // take fields into account
+        queryInfo.fields().remove("id");
+        Stream.concat(
+                queryInfo.fields().stream(),
+                orderBy.stream().filter(clause -> !"id".equals(clause.getProperty())
+                && realmUtils.getField(clause.getProperty()).isPresent()).map(Order::getProperty)).
+                distinct().forEach(field -> match.append(", n.").append(field).append(" AS ").append(field));
+
+        // take plain schemas into account
+        Stream.concat(
+                queryInfo.plainSchemas().stream(),
+                orderBy.stream().map(clause -> plainSchemaDAO.findById(clause.getProperty())).
+                        flatMap(Optional::stream)).distinct().forEach(schema -> {
+
+            match.append(", apoc.convert.getJsonProperty(n, 'plainAttrs.").append(schema.getKey());
+            if (schema.isUniqueConstraint()) {
+                match.append("', '$.uniqueValue')");
+            } else {
+                match.append("', '$.values')");
+            }
+            match.append(" AS ").append(schema.getKey());
+        });
+
+        TextStringBuilder query = queryInfo.query();
+
+        // take bases into account
+        AtomicInteger index = new AtomicInteger(0);
+        String basesClause = bases.stream().map(base -> {
+            int idx = index.incrementAndGet();
+            parameters.put("base" + idx, base);
+            parameters.put("like" + idx, SyncopeConstants.ROOT_REALM.equals(base) ? "/.*" : base + "/.*");
+            return "n.fullPath = $base" + idx + " OR n.fullPath =~ $like" + idx;
+        }).collect(Collectors.joining(" OR "));
+        if (query.startsWith("MATCH (n)")) {
+            query.replaceFirst("MATCH (n)", match + " WHERE (EXISTS { MATCH (n)");
+            query.append("} ");
+        } else {
+            query.replaceFirst("WHERE EXISTS", "WHERE (EXISTS");
+            query.insert(0, match.append(' '));
+        }
+        query.append(") AND EXISTS { ").append("(n) WHERE (").append(basesClause).append(")").append(" } ");
+    }
+
+    protected AttrCondQuery getQuery(
+            final AttrCond cond,
+            final boolean not,
+            final Map<String, Object> parameters) {
+
+        CheckResult<AttrCond> checked = check(cond);
+
+        TextStringBuilder query = new TextStringBuilder("MATCH (n) ");
+        switch (cond.getType()) {
+            case ISNOTNULL ->
+                query.append("WHERE n.`plainAttrs.").append(checked.schema().getKey()).append("` IS NOT NULL");
+
+            case ISNULL ->
+                query.append("WHERE n.`plainAttrs.").append(checked.schema().getKey()).append("` IS NULL");
+
+            default ->
+                fillAttrQuery(query, checked.value(), checked.schema(), cond, not, parameters);
+        }
+
+        return new AttrCondQuery(query.toString(), checked.schema());
+    }
+
+    protected String getQuery(
+            final AuxClassCond cond,
+            final boolean not,
+            final Map<String, Object> parameters) {
+
+        return "MATCH (n) "
+                + "WHERE " + (not ? "NOT " : "") + "(n)-[]-"
+                + "(:" + Neo4jAnyTypeClass.NODE + " {id: $" + setParameter(parameters, cond.getAuxClass()) + "}) ";
+    }
+
+    protected String getQuery(
+            final ResourceCond cond,
+            final boolean not,
+            final Map<String, Object> parameters) {
+
+        return "MATCH (n) "
+                + "WHERE " + (not ? "NOT " : "") + "(n)-[]-"
+                + "(:" + Neo4jExternalResource.NODE + " {id: $" + setParameter(parameters, cond.getResource()) + "}) ";
+    }
+
+    protected void getQueryForCustomConds(
+            final SearchCond cond,
+            final Map<String, Object> parameters,
+            final boolean not,
+            final TextStringBuilder query) {
+
+        // do nothing by default, leave it open for subclasses
+    }
+
+    protected void fillAttrQuery(
+            final TextStringBuilder query,
+            final PlainAttrValue attrValue,
+            final PlainSchema schema,
+            final AttrCond cond,
+            final boolean not,
+            final Map<String, Object> parameters) {
+
+        if (not && cond.getType() == AttrCond.Type.ISNULL) {
+            cond.setType(AttrCond.Type.ISNOTNULL);
+            fillAttrQuery(query, attrValue, schema, cond, true, parameters);
+            return;
+        }
+        if (not) {
+            if (schema.isUniqueConstraint()) {
+                fillAttrQuery(query, attrValue, schema, cond, false, parameters);
+                query.replaceFirst("WHERE", "WHERE NOT(");
+                query.append(')');
+            } else {
+                fillAttrQuery(query, attrValue, schema, cond, false, parameters);
+                query.replaceAll("any(", schema.getKey() + " IS NULL OR none(");
+            }
+            return;
+        }
+
+        String value = Optional.ofNullable(attrValue.getDateValue()).
+                map(DateTimeFormatter.ISO_OFFSET_DATE_TIME::format).
+                orElseGet(cond::getExpression);
+
+        boolean isStr = true;
+        boolean lower = false;
+        if (schema.getType().isStringClass()) {
+            lower = (cond.getType() == AttrCond.Type.IEQ || cond.getType() == AttrCond.Type.ILIKE);
+        } else if (schema.getType() != AttrSchemaType.Date) {
+            lower = false;
+            try {
+                switch (schema.getType()) {
+                    case Long ->
+                        Long.valueOf(value);
+
+                    case Double ->
+                        Double.valueOf(value);
+
+                    case Boolean -> {
+                        if (!("true".equalsIgnoreCase(value) || "false".equalsIgnoreCase(value))) {
+                            throw new IllegalArgumentException();
+                        }
+                    }
+
+                    default -> {
+                    }
+                }
+
+                isStr = false;
+            } catch (Exception nfe) {
+                // ignore
+            }
+        }
+
+        query.append("WHERE ");
+
+        switch (cond.getType()) {
+            case ISNULL -> {
+            }
+
+            case ISNOTNULL ->
+                query.append(schema.getKey()).append(" IS NOT NULL");
+
+            case ILIKE, LIKE -> {
+                if (schema.getType().isStringClass()) {
+                    appendPlainAttrCond(
+                            query,
+                            schema,
+                            " =~ \"" + (lower ? "(?i)" : "")
+                            + AnyRepoExt.escapeForLikeRegex(value).replace("%", ".*") + '"');
+                } else {
+                    query.append(ALWAYS_FALSE_CLAUSE);
+                    LOG.error("LIKE is only compatible with string or enum schemas");
+                }
+            }
+
+            case IEQ, EQ -> {
+                if (StringUtils.containsAny(value, AnyRepoExt.REGEX_CHARS) || lower) {
+                    appendPlainAttrCond(
+                            query,
+                            schema,
+                            " =~ \"^" + (lower ? "(?i)" : "")
+                            + AnyRepoExt.escapeForLikeRegex(value).replace("%", ".*") + "$\"");
+                } else {
+                    appendPlainAttrCond(
+                            query,
+                            schema,
+                            " = " + escapeIfString(value, isStr));
+                }
+            }
+
+            case GE ->
+                appendPlainAttrCond(
+                        query,
+                        schema,
+                        " >= " + escapeIfString(value, isStr));
+
+            case GT ->
+                appendPlainAttrCond(
+                        query,
+                        schema,
+                        " > " + escapeIfString(value, isStr));
+
+            case LE ->
+                appendPlainAttrCond(
+                        query,
+                        schema,
+                        " <= " + escapeIfString(value, isStr));
+
+            case LT ->
+                appendPlainAttrCond(
+                        query,
+                        schema,
+                        " < " + escapeIfString(value, isStr));
+
+            default -> {
+            }
+        }
+        // shouldn't occour: processed before
+    }
+
+    protected void fillAttrQuery(
+            final TextStringBuilder query,
+            final PlainAttrValue attrValue,
+            final PlainSchema schema,
+            final AnyCond cond,
+            final boolean not,
+            final Map<String, Object> parameters) {
+
+        if (not && cond.getType() == AttrCond.Type.ISNULL) {
+            cond.setType(AttrCond.Type.ISNOTNULL);
+            fillAttrQuery(query, attrValue, schema, cond, true, parameters);
+            return;
+        }
+        if (not) {
+            query.append("NOT (");
+            fillAttrQuery(query, attrValue, schema, cond, false, parameters);
+            query.append(')');
+            return;
+        }
+        if (not && cond.getType() == AttrCond.Type.ISNULL) {
+            cond.setType(AttrCond.Type.ISNOTNULL);
+            fillAttrQuery(query, attrValue, schema, cond, true, parameters);
+            return;
+        }
+
+        boolean lower = schema.getType().isStringClass()
+                && (cond.getType() == AttrCond.Type.IEQ || cond.getType() == AttrCond.Type.ILIKE);
+
+        String property = "n." + cond.getSchema();
+        if (lower) {
+            property = "toLower (" + property + ')';
+        }
+
+        switch (cond.getType()) {
+
+            case ISNULL ->
+                query.append(property).append(" IS NULL");
+
+            case ISNOTNULL ->
+                query.append(property).append(" IS NOT NULL");
+
+            case ILIKE, LIKE -> {
+                if (schema.getType().isStringClass()) {
+                    query.append(property).append(" =~ ");
+                    if (lower) {
+                        query.append("toLower($").
+                                append(setParameter(parameters, cond.getExpression().replace("%", ".*"))).
+                                append(')');
+                    } else {
+                        query.append('$').append(setParameter(parameters, cond.getExpression().replace("%", ".*")));
+                    }
+                } else {
+                    query.append(' ').append(ALWAYS_FALSE_CLAUSE);
+                    LOG.error("LIKE is only compatible with string or enum schemas");
+                }
+            }
+
+            case IEQ, EQ -> {
+                query.append(property).append('=');
+
+                if (lower) {
+                    query.append("toLower($").append(setParameter(parameters, attrValue.getValue())).append(')');
+                } else {
+                    query.append('$').append(setParameter(parameters, attrValue.getValue()));
+                }
+            }
+
+            case GE -> {
+                query.append(property);
+                if (not) {
+                    query.append('<');
+                } else {
+                    query.append(">=");
+                }
+                query.append('$').append(setParameter(parameters, attrValue.getValue()));
+            }
+
+            case GT -> {
+                query.append(property);
+                if (not) {
+                    query.append("<=");
+                } else {
+                    query.append('>');
+                }
+                query.append('$').append(setParameter(parameters, attrValue.getValue()));
+            }
+
+            case LE -> {
+                query.append(property);
+                if (not) {
+                    query.append('>');
+                } else {
+                    query.append("<=");
+                }
+                query.append('$').append(setParameter(parameters, attrValue.getValue()));
+            }
+
+            case LT -> {
+                query.append(property);
+                if (not) {
+                    query.append(">=");
+                } else {
+                    query.append('<');
+                }
+                query.append('$').append(setParameter(parameters, attrValue.getValue()));
+            }
+
+            default -> {
+            }
+        }
+    }
+
+    protected AnyCondQuery getQuery(
+            final AnyCond cond,
+            final boolean not,
+            final Map<String, Object> parameters) {
+
+        CheckResult<AnyCond> checked = check(
+                cond,
+                realmUtils.getField(cond.getSchema()).
+                        orElseThrow(() -> new IllegalArgumentException("Invalid schema " + cond.getSchema())),
+                RELATIONSHIP_FIELDS);
+
+        TextStringBuilder query = new TextStringBuilder("MATCH (n) WHERE ");
+
+        fillAttrQuery(query, checked.value(), checked.schema(), checked.cond(), not, parameters);
+
+        return new AnyCondQuery(query.toString(), checked.cond().getSchema());
+    }
+
+    @Override
+    protected long doCount(final Set<String> bases, final SearchCond cond) {
+        Map<String, Object> parameters = new HashMap<>();
+
+        QueryInfo queryInfo = getQuery(cond, parameters);
+
+        wrapQuery(bases, queryInfo, Streamable.empty(), parameters);
+        TextStringBuilder query = queryInfo.query();
+
+        query.append("RETURN COUNT(id)");
+
+        LOG.debug("Query: {}, parameters: {}", query, parameters);
+
+        return neo4jTemplate.count(query.toString(), parameters);
+    }
+
+    protected List<String> parseOrderBy(final Streamable<Sort.Order> orderBy) {
+        List<String> clauses = new ArrayList<>();
+
+        Set<String> orderByUniquePlainSchemas = new HashSet<>();
+        Set<String> orderByNonUniquePlainSchemas = new HashSet<>();
+        orderBy.forEach(clause -> {
+            if (realmUtils.getField(clause.getProperty()).isPresent()) {
+                clauses.add(clause.getProperty() + " " + clause.getDirection().name());
+            } else {
+                plainSchemaDAO.findById(clause.getProperty()).ifPresent(schema -> {
+                    if (schema.isUniqueConstraint()) {
+                        orderByUniquePlainSchemas.add(schema.getKey());
+                    } else {
+                        orderByNonUniquePlainSchemas.add(schema.getKey());
+                    }
+                    if (orderByUniquePlainSchemas.size() > 1 || orderByNonUniquePlainSchemas.size() > 1) {
+                        SyncopeClientException invalidSearch =
+                                SyncopeClientException.build(ClientExceptionType.InvalidSearchParameters);
+                        invalidSearch.getElements().add("Order by more than one attribute is not allowed; "
+                                + "remove one from " + (orderByUniquePlainSchemas.size() > 1
+                                ? orderByUniquePlainSchemas : orderByNonUniquePlainSchemas));
+                        throw invalidSearch;
+                    }
+
+                    clauses.add(schema.getKey() + " " + clause.getDirection().name());
+                });
+            }
+        });
+
+        return clauses;
+    }
+
+    @Override
+    protected List<Realm> doSearch(final Set<String> bases, final SearchCond cond, final Pageable pageable) {
+        Map<String, Object> parameters = new HashMap<>();
+
+        QueryInfo queryInfo = getQuery(cond, parameters);
+
+        wrapQuery(bases, queryInfo, pageable.getSort(), parameters);
+        TextStringBuilder query = queryInfo.query();
+
+        List<String> orderBy = parseOrderBy(pageable.getSort());
+        String orderByStmt = String.join(", ", orderBy);
+
+        query.append("RETURN id ").
+                append("ORDER BY ").append(orderByStmt);
+
+        if (pageable.isPaged()) {
+            query.append(" SKIP ").append(pageable.getPageSize() * pageable.getPageNumber()).
+                    append(" LIMIT ").append(pageable.getPageSize());
+        }
+
+        LOG.debug("Query: {}, parameters: {}", query, parameters);
+
+        return toList(neo4jClient.query(
+                query.toString()).bindAll(parameters).fetch().all(), "id");
+    }
+}
+At the end they must propose one complete (including typical use cases, edge cases, and error scenarios) JUnit 5 test file (Neo4jRealmSearchDAOGToTTest.java) for the given Java class. The complete JUnit test file must start with //###Test START## and finish with //###Test END##
